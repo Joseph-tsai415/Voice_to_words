@@ -14,11 +14,12 @@ error messages, and comments in templates/JS are all zh-Hant.
 ## Commands
 
 ```powershell
-.\setup.ps1                     # one-time: create .venv, pip install
-.\setup-gpu.ps1                 # check + install the CUDA wheels, then prove they work
-.\setup-gpu.ps1 -Revert         # back to the CPU-only wheels
-.\run.ps1                       # serve on http://127.0.0.1:7860
+.\run.ps1                       # the only command: installs if needed, then serves on :7860
 .\run.ps1 -Port 8000
+.\run.ps1 -Setup                # force the install check to run again
+.\setup.ps1                     # install only: .venv, packages, GPU, models
+.\setup.ps1 -Cpu                # install without attempting GPU
+.\setup.ps1 -Revert             # swap an installed GPU build back to the CPU one
 .\run.ps1 models                # list ASR models + download state
 .\run.ps1 pull <model-key>
 .\run.ps1 run <audio> -s 2 -f srt -o out.srt
@@ -27,9 +28,53 @@ error messages, and comments in templates/JS are all zh-Hant.
 .venv\Scripts\python.exe tests\test_tidy.py        # re-running the text fixes on a saved project
 ```
 
-`run.sh` / `setup.sh` are the bash/WSL equivalents; `run.cmd` is the
-double-click entry point. The two setup scripts carry the **same model list and
-the same byte counts** — change one and you must change the other.
+`run.sh` / `setup.sh` are the bash/WSL equivalents; `run.cmd` just forwards to
+`run.ps1` so the install decision lives in one place. The two setup scripts
+carry the **same model list and the same byte counts** — change one and you
+must change the other.
+
+## Install and launch
+
+`run.ps1` is the only command a user needs. It checks `.venv/.scribe-ready`,
+runs `setup.ps1` when that is missing or stale, then starts the server. The
+stamp holds the `requirements.txt` hash on line 1, so changing the package list
+re-runs the install; it is written only after everything succeeded, so a run
+interrupted half way leaves no stamp and the next launch finishes the job.
+
+**GPU is attempted by default and its failure is never fatal.** `setup.ps1`
+installs the CUDA wheels whenever NVIDIA *hardware is present*, which is
+deliberately not the same question as whether the GPU works right now: this is
+a laptop with switchable graphics, so the card comes and goes and `nvidia-smi`
+can be missing or permission-blocked while the card still exists. Detection is
+therefore `Get-PnpDevice ... VEN_10DE` **or** `nvidia-smi` (`lspci` on Linux),
+not `nvidia-smi` alone.
+
+Which device is actually used is decided **per launch, by the app**, never
+baked in at install time: `PROVIDER` defaults to `auto` and `gpu.cuda_works()`
+is an `lru_cache` in one process with no disk cache, so toggling the card and
+relaunching is all it takes. Line 2 of the stamp records `wheel=cpu|gpu` for
+the one case that install time *does* decide — if setup ran on a machine with
+no NVIDIA hardware at all, the CPU wheel is installed and no amount of
+relaunching will reach the GPU. The launcher upgrades `cpu -> gpu` when it
+later sees a card, and **never downgrades**, because the GPU wheel already
+falls back to CPU on its own and a two-way check would reinstall on every
+toggle.
+
+Two traps, both of which produced wrong output before they were fixed:
+
+- **A PowerShell function returns everything written to the pipeline**, not
+  just what `return` names. The CUDA probe printed its reason and then
+  `return ($LASTEXITCODE -eq 0)`, so the function handed back an array of
+  `@(output, $false)` — and a non-empty array is truthy, so a *failed* probe
+  reported GPU enabled. Capture the output, read `$LASTEXITCODE`, print, then
+  return the bare boolean.
+- **`nvidia-smi` can exist and still fail** (permissions, sandbox), writing its
+  complaint to stdout. Check its exit code before believing it, or the error
+  text gets printed as the card's name.
+
+`run.ps1` sets `[Console]::OutputEncoding` **before** it may invoke
+`setup.ps1`, or the installer's Chinese is mojibake on exactly the first run
+the launcher exists to smooth over.
 There is no lint/typecheck config and no unit-test framework — each file under
 `tests/` is a self-contained script run directly. `test_e2e.py` boots its own
 server on a free port, synthesises two-speaker audio with Windows SAPI, and

@@ -175,29 +175,25 @@ footer p{max-width:none}
 cd Voice_to_words</code></pre>
     </li>
     <li>
-      <h3>執行安裝腳本</h3>
-      <p>會建立虛擬環境、裝好套件，然後下載約 1 GB 的模型。找不到 Python 時會用 winget 幫你裝。</p>
-      <pre><code>.\setup.ps1</code></pre>
-      <p>下載中途斷線沒關係 — 再跑一次就好，已經抓完的檔案會跳過，只補沒下載完的。</p>
-    </li>
-    <li>
-      <h3>啟動</h3>
-      <p>瀏覽器會自動打開 <code>http://127.0.0.1:7860</code>。不想開 PowerShell 的話，直接雙擊 <code>run.cmd</code> 也可以。</p>
+      <h3>執行</h3>
+      <p>就這一行，沒有第二步。第一次會自己把環境準備好 — 找 Python（沒有就用 winget 裝）、建立虛擬環境、裝套件、偵測到 NVIDIA 顯示卡就順便開 GPU 加速、下載約 1 GB 的模型，然後啟動並打開 <code>http://127.0.0.1:7860</code>。</p>
       <pre><code>.\run.ps1</code></pre>
+      <p>之後每次都只是啟動，幾秒鐘。中途斷線沒關係 — 再跑一次會從沒做完的地方接下去，已經抓好的不會重抓。不想開 PowerShell 就直接雙擊 <code>run.cmd</code>。</p>
     </li>
   </ol>
 
   <h3>需要什麼</h3>
   <ul>
-    <li>Windows 10／11 與 PowerShell。macOS、Linux、WSL 改用 <code>./setup.sh</code> 再 <code>./run.sh</code>，做的事情完全一樣</li>
-    <li>Python 3.9 以上 — 沒有的話 <code>setup.ps1</code> 會嘗試自動安裝</li>
+    <li>Windows 10／11 與 PowerShell。macOS、Linux、WSL 改用 <code>./run.sh</code>，做的事情完全一樣</li>
+    <li>Python 3.9 以上 — 沒有的話會嘗試自動安裝</li>
     <li>約 2 GB 硬碟空間給內建模型，想試其他模型再多留幾 GB</li>
     <li>NVIDIA 顯示卡<strong>可選</strong>。沒有也能跑，只是辨識那一段會慢一點</li>
   </ul>
 
-  <h3>想用 GPU 加速</h3>
-  <p>裝好之後執行下面這行。它會檢查環境、裝 CUDA 版套件，然後實際載入模型試跑一次，確認真的能用才回報成功。想退回純 CPU 就加 <code>-Revert</code>。</p>
-  <pre><code>.\setup-gpu.ps1</code></pre>
+  <h3>GPU 加速是自動的</h3>
+  <p>只要機器上有 NVIDIA 顯示卡，第一次執行就會一併裝好 CUDA 版套件，<strong>不需要 3 GB 的 CUDA Toolkit</strong>。裝好後會實際載入一個模型試跑，確認真的能用才回報成功 — 光看套件名稱會騙人。</p>
+  <p>裝不起來也不會讓安裝失敗，只是退回 CPU，功能完全一樣，只有辨識那一段慢一點。</p>
+  <p><strong>筆電的獨顯可以隨時開關</strong>（Optimus／MUX），所以用哪個裝置是<strong>每次啟動重新實測</strong>的，不是裝好就定死。把獨顯切回來之後直接再跑一次就會用到 GPU，不用重裝，也不用改設定。</p>
 </section>
 
 <section>

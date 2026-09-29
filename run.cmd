@@ -1,18 +1,9 @@
 @echo off
-REM 雙擊即可啟動會議逐字稿工具
+REM 雙擊即可啟動會議逐字稿工具。
+REM 第一次執行會自動安裝（虛擬環境、套件、GPU、模型），之後直接啟動。
+REM 判斷要不要安裝的邏輯只寫在 run.ps1 一個地方，這裡只負責轉交。
 setlocal
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-    echo   尚未安裝，正在執行 setup.ps1 ...
-    powershell -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
-)
-if not exist ".venv\Scripts\python.exe" (
-    echo   安裝失敗，請手動執行 setup.ps1
-    pause
-    exit /b 1
-)
-set PYTHONUTF8=1
-set PYTHONIOENCODING=utf-8
 chcp 65001 >nul
-".venv\Scripts\python.exe" -m app %*
+powershell -ExecutionPolicy Bypass -File "%~dp0run.ps1" %*
 pause
