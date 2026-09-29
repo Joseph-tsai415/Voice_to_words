@@ -176,7 +176,29 @@ def test_cancel_queued() -> None:
     check("狀態記為已取消", state_of(q, "b") == "cancelled", str(state_of(q, "b")))
 
 
+def test_progress_never_goes_backwards() -> None:
+    """The bar must not collapse on the last step.
+
+    STAGE_WEIGHTS covers decode/load/diarize/vad/asr, and _overall() returns
+    0.0 for anything it does not know. "save" is reported *after* all of those
+    have finished, so it was being reported as 0% - the bar went from full to
+    empty at the exact moment the user is watching hardest.
+    """
+    section("進度不會倒退")
+    stages = ['decode', 'load', 'diarize', 'vad', 'asr', 'save']
+    values = [tqm._overall(s, 1.0) for s in stages]
+    for name, value in zip(stages, values):
+        check(f"{name} 有合理的進度", value > 0, f"{value:.2f}")
+    check("整段流程單調遞增",
+          all(values[i] <= values[i + 1] for i in range(len(values) - 1)),
+          str([round(v, 2) for v in values]))
+    check("最後一步是 100%", values[-1] == 1.0, f"{values[-1]:.2f}")
+    # Waiting for a model download really has done nothing yet.
+    check("等模型下載時是 0%", tqm._overall('wait_model', 1.0) == 0.0)
+
+
 def main() -> int:
+    test_progress_never_goes_backwards()
     test_concurrency()
     test_slot_not_leaked_on_delete()
     test_forget_only()

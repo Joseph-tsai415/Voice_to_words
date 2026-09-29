@@ -578,7 +578,9 @@ def transcribe(samples: np.ndarray, model_key: str, *, num_speakers: int = -1,
                zh_mode: str = DEFAULT_ZH_MODE,
                num_threads: int = 4, progress: ProgressFn | None = None,
                cancelled: Callable[[], bool] | None = None,
-               wav_path: str | None = None) -> list[Utterance]:
+               wav_path: str | None = None,
+               on_partial: Callable[[list[Utterance], list[int]], None] | None = None,
+               ) -> list[Utterance]:
     def report(stage: str, frac: float, detail: str = "") -> None:
         if progress:
             progress(stage, frac, detail)
@@ -628,6 +630,11 @@ def transcribe(samples: np.ndarray, model_key: str, *, num_speakers: int = -1,
     report("vad", 1.0, f"切出 {len(units)} 句")
     if stop():
         return []
+
+    # Diarization is finished by now, so this is the complete set of speakers
+    # for the recording. Partial writes need it to keep the speaker numbering
+    # stable while the transcript is still filling in.
+    clusters = sorted({spk for _, _, spk in units})
 
     # Sentences are decoded in batches. decode_streams() runs a whole batch
     # through the graph at once, which measured ~1.8x faster than decoding one
@@ -692,6 +699,17 @@ def transcribe(samples: np.ndarray, model_key: str, *, num_speakers: int = -1,
 
         done = min(offset + batch_len, len(usable))
         report("asr", done / len(usable), f"第 {done} / {len(usable)} 句")
+
+        # Hand out what is decoded so far so the user can start reading a long
+        # meeting instead of watching a placeholder. The full cluster list goes
+        # with it: the speaker table must be numbered from every cluster
+        # diarization found, not from the ones this batch happened to contain,
+        # or the names renumber under the user as later batches arrive.
+        if on_partial:
+            try:
+                on_partial(list(results), clusters)
+            except Exception as exc:        # never let a display aid kill a run
+                log.warning("寫出部分結果失敗（不影響辨識）：%s", exc)
 
     borrowed.__exit__(None, None, None)
     results = _tidy_speakers(results)

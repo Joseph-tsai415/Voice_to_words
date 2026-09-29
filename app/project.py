@@ -227,39 +227,82 @@ def speaker_label(index: int) -> str:
     return f"講者 {index + 1}"
 
 
-def populate(project_id: str, utterances: list[Any]) -> dict[str, Any]:
-    """Fill a freshly-created project with pipeline output."""
+def _speaker_table(utterances: list[Any],
+                   clusters: list[int] | None) -> tuple[list[dict], dict[int, str]]:
+    """Build the speaker list, numbered in cluster order.
+
+    `clusters` is the *complete* set diarization found. Pass it whenever the
+    utterance list might still grow: deriving the table from a partial list
+    renumbers everyone the moment a batch introduces a lower cluster id, so
+    the names the user is watching would shuffle under them mid-run.
+    """
+    cluster_ids = sorted(clusters) if clusters else sorted({u.speaker for u in utterances})
+    speakers: list[dict] = []
+    index_of: dict[int, str] = {}
+    for i, cluster in enumerate(cluster_ids):
+        sid = f"S{i + 1}"
+        index_of[cluster] = sid
+        speakers.append({
+            "id": sid,
+            "name": speaker_label(i),
+            "color": SPEAKER_COLORS[i % len(SPEAKER_COLORS)],
+            "cluster": cluster,
+        })
+    return speakers, index_of
+
+
+def _segments_from(utterances: list[Any], speakers: list[dict],
+                   index_of: dict[int, str]) -> list[dict]:
+    fallback = speakers[0]["id"] if speakers else "S1"
+    return [
+        {
+            "id": f"seg-{i:04d}",
+            "start": u.start,
+            "end": u.end,
+            "speaker": index_of.get(u.speaker, fallback),
+            "text": u.text,
+            "original_text": u.text,
+            "original_speaker": index_of.get(u.speaker, ""),
+            "edited": False,
+            "speaker_edited": False,
+        }
+        for i, u in enumerate(utterances)
+    ]
+
+
+def populate(project_id: str, utterances: list[Any],
+             clusters: list[int] | None = None) -> dict[str, Any]:
+    """Fill a project with finished pipeline output and mark it ready."""
     with _lock_for(project_id):
         project = load(project_id)
-        cluster_ids = sorted({u.speaker for u in utterances})
-        speakers = []
-        index_of: dict[int, str] = {}
-        for i, cluster in enumerate(cluster_ids):
-            sid = f"S{i + 1}"
-            index_of[cluster] = sid
-            speakers.append({
-                "id": sid,
-                "name": speaker_label(i),
-                "color": SPEAKER_COLORS[i % len(SPEAKER_COLORS)],
-                "cluster": cluster,
-            })
+        speakers, index_of = _speaker_table(utterances, clusters)
         project["speakers"] = speakers
-        project["segments"] = [
-            {
-                "id": f"seg-{i:04d}",
-                "start": u.start,
-                "end": u.end,
-                "speaker": index_of.get(u.speaker, speakers[0]["id"] if speakers else "S1"),
-                "text": u.text,
-                "original_text": u.text,
-                "original_speaker": index_of.get(u.speaker, ""),
-                "edited": False,
-                "speaker_edited": False,
-            }
-            for i, u in enumerate(utterances)
-        ]
+        project["segments"] = _segments_from(utterances, speakers, index_of)
         project["status"] = "ready"
         project.pop("error", None)
+        save(project)
+        return project
+
+
+def populate_progress(project_id: str, utterances: list[Any],
+                      clusters: list[int]) -> dict[str, Any]:
+    """Write what has been decoded so far, leaving the job running.
+
+    Deliberately does **not** touch `status`: the project stays `processing`
+    so the queue, the stall detector and the frontend all keep treating it as
+    in-flight. This only exists so the user can read the first half of a long
+    meeting instead of watching a placeholder for several minutes.
+    """
+    with _lock_for(project_id):
+        project = load(project_id)
+        if project.get("status") not in ("processing", "queued"):
+            # Cancelled or already finished while this batch was decoding -
+            # writing now would resurrect a transcript the user discarded.
+            return project
+        speakers, index_of = _speaker_table(utterances, clusters)
+        project["speakers"] = speakers
+        project["segments"] = _segments_from(utterances, speakers, index_of)
+        project["partial"] = True
         save(project)
         return project
 

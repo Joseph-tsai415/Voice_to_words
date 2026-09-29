@@ -356,6 +356,23 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 }
 
 .pitem-top { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+/* While recognition is still running the transcript is readable but not
+   editable: the tidy passes rewrite every unedited sentence at the end and
+   the splitting step changes segment ids, so anything typed now would be
+   silently thrown away. Hide the controls that imply otherwise. */
+body.partial .sent-tools,
+body.partial .sent-check,
+body.partial .spk-del { display: none; }
+body.partial .sent-text { cursor: default; }
+body.partial .sent-text:focus { outline: none; background: transparent; }
+body.partial .sent-spk { pointer-events: none; opacity: .75; }
+body.partial #transcript::after {
+  content: '辨識還在進行中，這是目前已完成的部分。完成後會自動整理標點與斷句，現在先不能編輯。';
+  display: block; margin: 14px 2px 4px; padding: 10px 12px;
+  border: 1px dashed var(--line); border-radius: var(--radius, 10px);
+  font-size: 12.5px; color: var(--ink-3); text-align: center;
+}
+
 /* Hidden until hover: deleting a meeting is irreversible, so it should not
    sit under the cursor of someone browsing the list. */
 .pitem-del {

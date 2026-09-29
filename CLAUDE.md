@@ -26,6 +26,8 @@ error messages, and comments in templates/JS are all zh-Hant.
 .venv\Scripts\python.exe tests\test_e2e.py     # full end-to-end suite
 .venv\Scripts\python.exe tests\test_textfixes.py   # length cap, role gate, punctuation, splitting
 .venv\Scripts\python.exe tests\test_tidy.py        # re-running the text fixes on a saved project
+.venv\Scripts\python.exe tests\test_partial.py     # showing sentences while recognition runs
+.venv\Scripts\python.exe tests\test_upload.py      # what an uploaded filename turns into
 ```
 
 `run.sh` / `setup.sh` are the bash/WSL equivalents; `run.cmd` just forwards to
@@ -80,7 +82,8 @@ There is no lint/typecheck config and no unit-test framework — each file under
 server on a free port, synthesises two-speaker audio with Windows SAPI, and
 asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
-`test_memory`, `test_textfixes`, `test_tidy`) need no audio and run in seconds.
+`test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`)
+need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
 compete for the same 8 GB of VRAM and the loser dies of CUDA OOM.
@@ -373,6 +376,41 @@ submission either way. Test the guard with an unknown key too: the
 natural-looking `ASR_MODELS.get(k, {}).get("role", "asr") != "asr"` passes
 unknown keys, because the default fires on the missing *entry*.
 
+## Progress, and showing work before it is finished
+
+Stage weights live in `STAGE_WEIGHTS` in
+[app/transcribe_queue.py](app/transcribe_queue.py) and `_overall()` turns
+(stage, fraction) into one number. Any stage it does not know returns 0.0, so
+**a stage outside the table must be added to `_TERMINAL` or the bar collapses**
+- `save` is reported after every weighted stage has finished and was showing
+0%, dropping the bar from full to empty on the last step.
+
+The ASR loop hands each decoded batch to `on_partial`, and the worker writes it
+with `store.populate_progress()`, which leaves `status` alone so the queue and
+the stall detector keep treating the job as in-flight. Measured on a 25-minute
+recording: segments appear at 14, 29, 45 ... instead of only at the end. It
+only helps during recognition, because diarization has to finish before any of
+it can start - on that file the first text lands at ~200s of a ~280s run.
+
+`populate_progress` **must** be given the full cluster list. The speaker table
+is numbered in cluster order, so building it from a partial list renumbers
+everyone the moment a later batch introduces a lower cluster id - the names
+would shuffle under the reader. Diarization is done before recognition begins,
+so the complete set is known; the worker also keeps it for the final
+`populate()`, or the numbering changes at the last moment.
+
+A partial transcript is **read-only** (`body.partial`). The tidy passes rewrite
+every unedited sentence when the job finishes and splitting changes segment
+ids, so anything typed during the run would be silently discarded.
+
+**Never rebuild a polled element's DOM.** The status panel and the sidebar rows
+refresh once a second while a job runs. Re-setting `innerHTML` replaced
+`.bar-fill` and `.spinner` with new nodes every time, so the width transition
+never ran and the spinner's rotation restarted from zero - the bar visibly
+reset itself whenever data arrived. Both now build once and update values in
+place, and `loadProjects()` reconciles the list by `data-id` instead of
+clearing it.
+
 ## Two queues
 
 Both follow the same shape and the same rule: **the server is the single source
@@ -476,6 +514,16 @@ zero. A non-empty `.part` is therefore progress worth keeping:
   [app/textproc.py](app/textproc.py) is anchored on a known token list so a
   stray `<` in real speech survives, and `_DANGLING` cleans up the comma the
   removal strands (`嗯嗯嗯，< sil >。` → `嗯嗯嗯。`).
+- **`secure_filename()` destroys a Chinese filename**, and with it the
+  extension: `secure_filename("孟青宴安討論.m4a")` is `"m4a"`. The suffix then
+  came out empty, which skipped the supported-format check (it only fired when
+  a suffix was present), stored the upload as `source` with no extension, and
+  named the project "m4a" - which the dialog hits for real, because it sends an
+  empty name for every multi-file upload. `upload_name_and_suffix()` in
+  [app/audio.py](app/audio.py) keeps the original name and takes the suffix
+  from it. Sanitising bought nothing here: the upload is written to
+  `source<suffix>` inside a uuid folder, so the user's filename never reaches
+  the filesystem and only the whitelisted suffix does.
 - **m4a/aac** cannot be read by libsndfile. [app/audio.py](app/audio.py) routes
   non-native suffixes through PyAV, which bundles FFmpeg — do not add a dependency
   on an external `ffmpeg` binary.

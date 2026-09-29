@@ -49,7 +49,16 @@ _PROPORTIONAL = frozenset({"diarize", "vad", "asr"})
 _FIXED_WEIGHT = STAGE_WEIGHTS["decode"] + STAGE_WEIGHTS["load"]
 
 
+# Stages that sit outside the weighted pipeline because they are not part of
+# the proportional work. "save" runs after every weighted stage has finished,
+# so it is 100% - returning the 0.0 that an unknown stage gets made the bar
+# collapse from full to empty on the very last step.
+_TERMINAL = frozenset({"save", "done"})
+
+
 def _overall(stage: str, frac: float) -> float:
+    if stage in _TERMINAL:
+        return 1.0
     if stage not in STAGE_WEIGHTS:
         return 0.0
     before = sum(STAGE_WEIGHTS[s] for s in _ORDER[:_ORDER.index(stage)])
@@ -306,6 +315,17 @@ class TranscriptionQueue:
             from .audio import write_wav
             write_wav(wav, samples)
 
+            # Write each decoded batch straight to the project so the browser
+            # can show a long meeting filling in, instead of a placeholder for
+            # several minutes. The cluster list is captured on the way past:
+            # the final populate() needs it too, or the speaker numbering the
+            # user has been watching changes at the last moment.
+            seen_clusters: list[int] = []
+
+            def _partial(utts: list, clusters: list[int]) -> None:
+                seen_clusters[:] = clusters
+                store.populate_progress(project_id, utts, clusters)
+
             utterances = asr.transcribe(
                 samples, model,
                 num_speakers=opts.get("num_speakers", -1),
@@ -315,13 +335,16 @@ class TranscriptionQueue:
                 progress=lambda s, f, d: self._set(project_id, s, f, d),
                 cancelled=lambda: self._cancelled(project_id),
                 wav_path=str(wav),
+                on_partial=_partial,
             )
             if self._cancelled(project_id):
                 raise _Cancelled()
 
             self._set(project_id, "save", 1.0, "儲存結果…")
             del samples                  # a 25-minute recording is ~100 MB
-            store.populate(project_id, utterances)
+            # Same cluster list as the partial writes used, so the speaker
+            # numbering does not shift when the final version lands.
+            store.populate(project_id, utterances, seen_clusters or None)
             source.unlink(missing_ok=True)
 
         except _Cancelled:

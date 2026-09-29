@@ -24,6 +24,34 @@ SUPPORTED_SUFFIXES = sorted(NATIVE_SUFFIXES | {
 })
 
 
+def upload_name_and_suffix(filename: str) -> tuple[str, str]:
+    """Split an uploaded filename into (display name, lower-case suffix).
+
+    Deliberately does **not** use secure_filename(): that strips every
+    non-ASCII character, so a Chinese recording name collapses to its own
+    extension -- `secure_filename("孟青宴安討論.m4a")` is `"m4a"`. The suffix
+    then came out empty, which silently skipped the supported-format check
+    (it only fires when a suffix is present), left the upload stored as
+    `source` with no extension, and named the project "m4a" whenever the
+    dialog sends no explicit name -- which it does for every multi-file
+    upload.
+
+    Sanitising was never buying anything here. The upload is written to
+    `source<suffix>` inside a uuid-named folder, so the user's filename never
+    reaches the filesystem; only the suffix does, and the caller checks that
+    against SUPPORTED_SUFFIXES. Path separators are still stripped from both
+    halves so neither can climb out of the project folder.
+    """
+    raw = (filename or "").replace("\\", "/").split("/")[-1].strip()
+    stem, dot, ext = raw.rpartition(".")
+    if not dot:                       # no extension at all
+        stem, ext = raw, ""
+    suffix = ("." + ext.lower()) if ext else ""
+    if "/" in suffix or "\\" in suffix or ".." in suffix:
+        suffix = ""
+    return (stem.strip() or "錄音"), suffix
+
+
 class AudioError(RuntimeError):
     pass
 

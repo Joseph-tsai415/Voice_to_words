@@ -141,13 +141,34 @@ async function loadProjects() {
   const list = payload.items || [];
   state.projects = list;
 
+  // Reconcile by id instead of rebuilding. This list refreshes every second
+  // while anything is running, and wiping it restarted every progress bar's
+  // transition and dropped whatever the user was hovering.
   const box = $('#project-list');
-  box.innerHTML = '';
+  const hint = $('.hint', box);
   if (!list.length) {
-    box.innerHTML = '<p class="hint" style="padding:0 6px">尚無紀錄</p>';
+    if (!hint) box.innerHTML = '<p class="hint" style="padding:0 6px">尚無紀錄</p>';
+  } else if (hint) {
+    hint.remove();
   }
+
+  let prev = null;
   for (const p of list) {
-    box.appendChild(projectRow(p));
+    let el = box.querySelector(`.pitem[data-id="${CSS.escape(p.id)}"]`);
+    if (el) updateProjectRow(el, p);
+    else el = projectRow(p);
+    // Move only when the order actually differs, so untouched rows keep
+    // their running CSS transitions.
+    if (prev) {
+      if (prev.nextElementSibling !== el) prev.after(el);
+    } else if (box.firstElementChild !== el) {
+      box.prepend(el);
+    }
+    prev = el;
+  }
+  const alive = new Set(list.map((p) => p.id));
+  for (const el of [...box.querySelectorAll('.pitem')]) {
+    if (!alive.has(el.dataset.id)) el.remove();
   }
   $('#queue-badge').textContent = payload.active ? `${payload.active} 個進行中` : '';
   $('#queue-badge').hidden = !payload.active;
@@ -155,44 +176,76 @@ async function loadProjects() {
 }
 
 /* 側欄的一列：每個專案都有自己的狀態與進度 */
+/* Built once per project, then updated in place. Recreating the row on every
+   poll threw away .bar-fill mid-transition and made a new one, so the width
+   animation never ran and the bar visibly reset itself once a second. It did
+   look like the fetch was resetting the animation - it was. */
 function projectRow(p) {
-  const style = STATUS_STYLE[isStalled(p) ? 'stalled' : p.status]
-             || { label: p.status, cls: '' };
-  const busy = isBusy(p);
-  const pct = Math.round(((p.job && p.job.progress) || 0) * 100);
-
   const el = document.createElement('div');
-  el.className = 'pitem' + (p.id === state.projectId ? ' active' : '') + (busy ? ' busy' : '');
+  el.className = 'pitem';
+  el.dataset.id = p.id;
   el.innerHTML = `
     <div class="pitem-top">
       <div class="pitem-name"></div>
-      <span class="pill ${style.cls}">${style.label}</span>
+      <span class="pill"></span>
       <button class="pitem-del" title="刪除這場會議">🗑</button>
     </div>
-    <div class="pitem-meta">
-      <span>${p.duration ? fmt(p.duration) : '—'}</span>
-      ${p.num_segments ? `<span>${p.num_segments} 句</span>` : ''}
-      ${p.speakers.length ? `<span>${p.speakers.length} 人</span>` : ''}
-    </div>
-    ${busy ? `<div class="bar thin"><div class="bar-fill" style="width:${pct}%"></div></div>
-              <div class="pitem-stage"></div>` : ''}`;
-  $('.pitem-name', el).textContent = p.name;
-  if (busy) {
-    const job = p.job || {};
-    $('.pitem-stage', el).textContent =
-      job.state === 'queued' && job.position > 0
-        ? `排隊中（前面 ${job.position} 個）`
-        : `${job.stage_label || '準備中'} ${pct}%` + (job.eta ? `　剩約 ${fmt(job.eta)}` : '');
-  }
+    <div class="pitem-meta"></div>
+    <div class="bar thin" hidden><div class="bar-fill"></div></div>
+    <div class="pitem-stage" hidden></div>`;
+
   // stopPropagation: the whole row opens the project, so without this the
-  // delete click would also open the thing it just removed.
+  // delete click would also open the thing it just removed. Reads the id and
+  // name off the element, so it stays correct as the row is updated.
   $('.pitem-del', el).onclick = (e) => {
     e.stopPropagation();
-    deleteProject(p.id, p.name);
+    deleteProject(el.dataset.id, el.dataset.name || '');
   };
+  el.onclick = () => openProject(el.dataset.id);
 
-  el.onclick = () => openProject(p.id);
+  updateProjectRow(el, p);
   return el;
+}
+
+/* Writing identical text is still a DOM mutation as far as the browser is
+   concerned, and once a second that is enough to drop hover and selection. */
+function setText(node, value) {
+  if (node.textContent !== value) node.textContent = value;
+}
+
+function updateProjectRow(el, p) {
+  const style = STATUS_STYLE[isStalled(p) ? 'stalled' : p.status]
+             || { label: p.status, cls: '' };
+  const busy = isBusy(p);
+  const job = p.job || {};
+  const pct = Math.round((job.progress || 0) * 100);
+
+  el.dataset.name = p.name;
+  const cls = 'pitem' + (p.id === state.projectId ? ' active' : '') + (busy ? ' busy' : '');
+  if (el.className !== cls) el.className = cls;
+
+  setText($('.pitem-name', el), p.name);
+  const pill = $('.pill', el);
+  if (pill.className !== 'pill ' + style.cls) pill.className = 'pill ' + style.cls;
+  setText(pill, style.label);
+
+  const bits = [p.duration ? fmt(p.duration) : '—'];
+  if (p.num_segments) bits.push(`${p.num_segments} 句`);
+  if (p.speakers.length) bits.push(`${p.speakers.length} 人`);
+  const meta = $('.pitem-meta', el);
+  const html = bits.map((b) => `<span>${b}</span>`).join('');
+  if (meta.innerHTML !== html) meta.innerHTML = html;
+
+  $('.bar', el).hidden = !busy;
+  if (busy) $('.bar-fill', el).style.width = pct + '%';
+
+  const stage = $('.pitem-stage', el);
+  stage.hidden = !busy;
+  if (busy) {
+    setText(stage, job.state === 'queued' && job.position > 0
+      ? `排隊中（前面 ${job.position} 個）`
+      : `${job.stage_label || '準備中'} ${pct}%` + (job.eta ? `　剩約 ${fmt(job.eta)}` : ''));
+  }
 }
 
 function closeWorkspace() {
@@ -317,6 +370,13 @@ function renderTranscript() {
   }
 }
 
+/* True while a job is still running and we are showing what it has produced
+   so far. Edits made now would be overwritten by the tidy passes at the end,
+   so the transcript is read-only until the job finishes. */
+function partialView() {
+  return document.body.classList.contains('partial');
+}
+
 function renderSentence(seg) {
   const el = document.createElement('div');
   el.className = 'sent';
@@ -332,7 +392,7 @@ function renderSentence(seg) {
     <input type="checkbox" class="sent-check">
     <button class="icon-btn sent-play" title="只播這一句，播完就停（校對講者時最好用）">▶</button>
     <span class="sent-time" title="從這裡接著往下播">${fmt(seg.start)}</span>
-    <div class="sent-text" contenteditable="plaintext-only" spellcheck="false"></div>
+    <div class="sent-text" contenteditable="${partialView() ? 'false' : 'plaintext-only'}" spellcheck="false"></div>
     <select class="sent-spk" title="這句是誰說的"></select>
     <div class="sent-tools">
       <button class="icon-btn" data-act="rerun" title="重新辨識這句（多人講話時可自動拆開）">🔁</button>
@@ -356,6 +416,7 @@ function renderSentence(seg) {
 
   /* ── 這句改成誰說的：本工具的核心動作 ── */
   sel.onchange = async () => {
+    if (partialView()) return;          // 還在辨識，改了也會被最後的整理蓋掉
     await mutate(`/api/projects/${state.projectId}/segments/${seg.id}`,
                  { method: 'PATCH', body: JSON.stringify({ speaker: sel.value }) });
     toast(`這句改成「${speakerOf(sel.value).name}」`);
@@ -504,22 +565,33 @@ async function openProject(id) {
     renderProjectStatus(meta);
 
     const done = proj.status === 'ready' && (proj.segments || []).length > 0;
+    // The pipeline writes each decoded batch as it lands, so a running job
+    // usually already has something worth reading.
+    const partial = !done && isBusy(meta) && (proj.segments || []).length > 0;
+
     $('#player').hidden = !done;
-    $('#speakers').hidden = !done;
+    $('#speakers').hidden = !(done || partial);
     $('#btn-export').disabled = !done;
     $('#btn-select-mode').disabled = !done;
     $('#btn-rerun').disabled = isBusy(meta);
     state.reworked = new Set();
 
-    if (done) {
+    // Editing a partial transcript would be thrown away: the tidy passes
+    // rewrite every unedited sentence once recognition finishes, and the
+    // splitting step changes segment ids. So it is readable, not editable.
+    document.body.classList.toggle('partial', partial);
+
+    if (done || partial) {
       renderSpeakers();
       renderTranscript();
-      const audio = $('#audio');
-      audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
-      audio.load();
+      if (done) {
+        const audio = $('#audio');
+        audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
+        audio.load();
+      }
     } else {
       $('#transcript').innerHTML = isBusy(meta)
-        ? '<p class="hint">辨識完成後，逐字稿會出現在這裡。你可以先去處理別的專案。</p>'
+        ? '<p class="hint">正在辨識，第一批句子出來後就會顯示在這裡。你可以先去處理別的專案。</p>'
         : '<p class="hint">這個專案還沒有逐字稿。</p>';
     }
     updateMeta();
@@ -750,10 +822,15 @@ function startProjectPolling() {
     if (state.projectId) {
       const meta = (state.projects || []).find((p) => p.id === state.projectId);
       if (meta) renderProjectStatus(meta);
-      // 這個專案剛跑完 -> 載入結果
       if (meta && meta.status === 'ready' && state.project
-          && (state.project.segments || []).length === 0) {
+          && state.project.status !== 'ready') {
+        // 剛跑完 -> 載入最終版本（整理過、切好句的那一份）
         openProject(state.projectId);
+      } else if (meta && isBusy(meta) && meta.num_segments !== state.partialCount) {
+        // 又有一批句子寫出來了。用清單裡的句數當作門檻，不然每秒都要抓一次
+        // 完整的專案 JSON，還會把 250 列重畫一遍。
+        state.partialCount = meta.num_segments;
+        refreshPartial(state.projectId);
       }
     }
     if (!active) stopProjectPolling();
@@ -763,6 +840,33 @@ function startProjectPolling() {
 function stopProjectPolling() {
   clearInterval(state.projTimer);
   state.projTimer = null;
+  state.partialCount = undefined;
+}
+
+/* Pull in the sentences decoded since the last batch. Deliberately not
+   openProject(): that scrolls to the top and rebuilds the whole workspace,
+   which would yank the page around every few seconds while someone is
+   reading. Only the transcript and the speaker list can change mid-run. */
+async function refreshPartial(id) {
+  let proj;
+  try {
+    proj = await api(`/api/projects/${id}`);
+  } catch (err) {
+    logError('讀取部分結果失敗', err);
+    return;
+  }
+  if (state.projectId !== id) return;          // 使用者已經切到別的專案
+  state.project = proj;
+  if (!(proj.segments || []).length) return;
+
+  const box = $('#transcript');
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  $('#speakers').hidden = false;
+  renderSpeakers();
+  renderTranscript();
+  updateMeta();
+  // Following along at the bottom? Stay there as new sentences land.
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
 /* 完整流程，讓使用者看得到自己在第幾步 */
@@ -815,18 +919,28 @@ function renderProjectStatus(meta) {
     const stage = (job && job.stage_label) || '排隊中';
     const detail = (job && job.detail) || '';
     const queued = job && job.state === 'queued' && job.position > 0;
-    panel.innerHTML = `
-      <div class="ps-row">
-        <span class="spinner"></span>
-        <b class="ps-stage"></b>
-        <span class="ps-detail"></span>
-        <button class="btn ghost sm" id="ps-cancel">取消</button>
-      </div>
-      <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
-      <div class="ps-foot">
-        <span class="ps-steps"></span>
-        <span class="ps-times"></span>
-      </div>`;
+
+    // Build the skeleton once and only write values afterwards. Re-setting
+    // innerHTML on every poll destroyed .bar-fill and .spinner and made new
+    // ones, so the width transition never ran and the spinner's rotation
+    // restarted from zero each second - the bar appeared to reset itself
+    // every time data arrived from the server.
+    if (panel.dataset.mode !== 'busy') {
+      panel.dataset.mode = 'busy';
+      panel.innerHTML = `
+        <div class="ps-row">
+          <span class="spinner"></span>
+          <b class="ps-stage"></b>
+          <span class="ps-detail"></span>
+          <button class="btn ghost sm" id="ps-cancel">取消</button>
+        </div>
+        <div class="bar"><div class="bar-fill"></div></div>
+        <div class="ps-foot">
+          <span class="ps-steps"></span>
+          <span class="ps-times"></span>
+        </div>`;
+    }
+    $('.bar-fill', panel).style.width = pct + '%';
     $('.ps-stage', panel).textContent =
       queued ? `排隊中（前面還有 ${job.position} 個）` : `${stage} ${pct}%`;
     $('.ps-detail', panel).textContent = detail;
@@ -843,13 +957,17 @@ function renderProjectStatus(meta) {
     if (job && job.audio_seconds) bits.push(`錄音 ${fmt(job.audio_seconds)}`);
     if (job && job.elapsed) bits.push(`已跑 ${fmt(job.elapsed)}`);
     bits.push(job && job.eta ? `剩約 ${fmt(job.eta)}` : (queued ? '' : '剩餘時間估算中…'));
-    $('.ps-times', panel).textContent = bits.filter(Boolean).join('　·　');
+    const times = bits.filter(Boolean).join('　·　');
+    if ($('.ps-times', panel).textContent !== times) {
+      $('.ps-times', panel).textContent = times;
+    }
     $('#ps-cancel', panel).onclick = async () => {
       try { await api(`/api/projects/${meta.id}/cancel`, { method: 'POST' }); }
       catch (err) { showError('取消失敗', err); }
       loadProjects();
     };
   } else {
+    panel.dataset.mode = 'idle';
     const msg = stalled
       ? '這個專案的辨識工作已經不在執行了（多半是伺服器重新啟動過）。按「重新辨識」即可從頭跑一次。'
       : failed ? (meta.error || (job && job.error) || '辨識失敗')
