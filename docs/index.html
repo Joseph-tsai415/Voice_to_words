@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>會議逐字稿工具</title>
+<meta name="description" content="音檔進，分好講者的逐字稿出。全程在自己的電腦上跑，音檔不會離開這台機器。">
+<meta property="og:title" content="會議逐字稿工具">
+<meta property="og:description" content="音檔進，分好講者的逐字稿出。全程在自己的電腦上跑，音檔不會離開這台機器。">
+<meta property="og:type" content="website">
+<style>
+:root{
+  --bg:#ffffff; --bg-soft:#f6f7f9; --bg-code:#f2f3f5;
+  --fg:#1b1d21; --fg-soft:#5b6169; --fg-faint:#868d96;
+  --line:#e3e6ea; --accent:#2f6f4f; --accent-soft:#e8f2ec;
+  --warn-bg:#fdf6e6; --warn-line:#e8d9a8; --warn-fg:#6b551c;
+  --radius:10px; --maxw:860px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171a; --bg-soft:#1c1f23; --bg-code:#202429;
+    --fg:#e8eaed; --fg-soft:#a8b0b9; --fg-faint:#7b838d;
+    --line:#2c3137; --accent:#7fc4a0; --accent-soft:#1e2c25;
+    --warn-bg:#2a2518; --warn-line:#4a4227; --warn-fg:#d9c88a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171a; --bg-soft:#1c1f23; --bg-code:#202429;
+  --fg:#e8eaed; --fg-soft:#a8b0b9; --fg-faint:#7b838d;
+  --line:#2c3137; --accent:#7fc4a0; --accent-soft:#1e2c25;
+  --warn-bg:#2a2518; --warn-line:#4a4227; --warn-fg:#d9c88a;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:system-ui,-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif;
+  font-size:16px; line-height:1.75; letter-spacing:.01em;
+}
+.wrap{max-width:var(--maxw); margin:0 auto; padding:0 16px}
+a{color:var(--accent); text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em}
+:not(pre)>code{background:var(--bg-code); padding:.15em .4em; border-radius:4px}
+pre{
+  background:var(--bg-code); border:1px solid var(--line); border-radius:var(--radius);
+  padding:14px 16px; overflow-x:auto; line-height:1.6; margin:0;
+}
+pre code{font-size:.875rem}
+
+/* hero */
+header{border-bottom:1px solid var(--line); background:var(--bg-soft)}
+.hero{padding:64px 0 56px}
+h1{font-size:clamp(1.9rem,5vw,2.6rem); line-height:1.25; margin:0 0 14px; letter-spacing:-.01em}
+.tagline{font-size:clamp(1rem,2.6vw,1.15rem); color:var(--fg-soft); margin:0 0 8px; max-width:34em}
+.subtle{color:var(--fg-faint); font-size:.95rem; margin:0}
+.cta{display:flex; gap:10px; flex-wrap:wrap; margin-top:28px}
+.btn{
+  display:inline-block; padding:9px 18px; border-radius:var(--radius);
+  border:1px solid var(--accent); font-size:.95rem; font-weight:600;
+}
+.btn:hover{text-decoration:none}
+.btn-primary{background:var(--accent); color:var(--bg); border-color:var(--accent)}
+.btn-primary:hover{opacity:.9}
+.btn-ghost{color:var(--accent); background:transparent}
+.btn-ghost:hover{background:var(--accent-soft)}
+
+/* sections */
+section{padding:52px 0; border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+h2{font-size:1.4rem; margin:0 0 6px; letter-spacing:-.005em}
+h3{font-size:1.02rem; margin:26px 0 8px}
+.lede{color:var(--fg-soft); margin:0 0 24px; max-width:44em}
+p{margin:0 0 14px; max-width:44em}
+ul{padding-left:1.3em; margin:0 0 14px; max-width:44em}
+li{margin:.3em 0}
+
+/* cards */
+.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:14px; margin-top:6px}
+.card{background:var(--bg-soft); border:1px solid var(--line); border-radius:var(--radius); padding:18px}
+.card h3{margin:0 0 6px; font-size:1rem}
+.card p{margin:0; font-size:.92rem; color:var(--fg-soft)}
+
+/* steps */
+ol.steps{list-style:none; counter-reset:s; padding:0; margin:0}
+ol.steps>li{counter-increment:s; position:relative; padding-left:42px; margin-bottom:26px; max-width:none}
+ol.steps>li::before{
+  content:counter(s); position:absolute; left:0; top:1px;
+  width:27px; height:27px; border-radius:50%; background:var(--accent-soft);
+  color:var(--accent); font-weight:700; font-size:.85rem;
+  display:grid; place-items:center;
+}
+ol.steps h3{margin:0 0 8px; font-size:1rem}
+ol.steps p{font-size:.93rem; color:var(--fg-soft)}
+
+/* table */
+.scroll{overflow-x:auto; margin:0 0 14px}
+table{border-collapse:collapse; width:100%; font-size:.9rem; min-width:400px}
+th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line)}
+th{font-weight:600; color:var(--fg-soft); font-size:.83rem; letter-spacing:.02em}
+td.num{font-variant-numeric:tabular-nums; white-space:nowrap}
+.win{color:var(--accent); font-weight:600}
+
+/* note */
+.note{
+  background:var(--warn-bg); border:1px solid var(--warn-line); color:var(--warn-fg);
+  border-radius:var(--radius); padding:14px 16px; margin:0 0 22px; font-size:.93rem;
+}
+.note strong{color:inherit}
+.note p{margin:0; max-width:none; color:inherit}
+.note p+p{margin-top:8px}
+
+footer{padding:36px 0 56px; color:var(--fg-faint); font-size:.88rem}
+footer p{max-width:none}
+@media (max-width:560px){
+  .hero{padding:44px 0 40px}
+  section{padding:40px 0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hero">
+    <h1>會議逐字稿工具</h1>
+    <p class="tagline">音檔進，分好講者的逐字稿出。中文會議專用，逐句都能改講者、改字。</p>
+    <p class="subtle">全程在你自己的電腦上跑 — 音檔不會離開這台機器。</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#install">安裝</a>
+      <a class="btn btn-ghost" href="https://github.com/Joseph-tsai415/Voice_to_words">GitHub 原始碼</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<section>
+  <div class="note">
+    <p><strong>這個網頁本身不會幫你轉逐字稿。</strong>它只是說明與安裝指引。</p>
+    <p>工具是裝在你自己電腦上跑的，用你的 CPU 和顯示卡運算。音檔、逐字稿都留在本機，不會上傳到任何地方，也不需要註冊或連網服務。</p>
+  </div>
+
+  <h2>它做什麼</h2>
+  <p class="lede">丟一段會議錄音進去，得到一份標好「誰在什麼時候說了什麼」的逐字稿，然後在瀏覽器裡把認錯的地方改掉。</p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>講者分離</h3>
+      <p>講者分離與語音辨識分開算再交集，所以一句話中間換人講也會被切開，能逐句指定講者。</p>
+    </div>
+    <div class="card">
+      <h3>改起來順手</h3>
+      <p>改一次名字就全篇更新，可以切句、合併、批次指定講者。改過的句子會標記，之後的自動修正不會蓋掉你的字。</p>
+    </div>
+    <div class="card">
+      <h3>輸出六種格式</h3>
+      <p>純文字、Markdown、SRT、WebVTT、CSV、JSON。字幕檔可以直接拿去配影片。</p>
+    </div>
+    <div class="card">
+      <h3>繁體中文輸出</h3>
+      <p>多數模型只吐簡體，工具會用 OpenCC 轉成繁體與台灣用詞。標點、詞語修正表也能事後再套一次。</p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <h2>安裝</h2>
+  <p class="lede">Windows 10／11，其他系統看下面的 bash 版本。第一次安裝約需 10 分鐘，大部分時間在下載模型。</p>
+
+  <ol class="steps">
+    <li>
+      <h3>取得程式</h3>
+      <p>用 Git，或直接在 GitHub 上按 <em>Code → Download ZIP</em> 解壓縮。</p>
+      <pre><code>git clone https://github.com/Joseph-tsai415/Voice_to_words.git
+cd Voice_to_words</code></pre>
+    </li>
+    <li>
+      <h3>執行安裝腳本</h3>
+      <p>會建立虛擬環境、裝好套件，然後下載約 1 GB 的模型。找不到 Python 時會用 winget 幫你裝。</p>
+      <pre><code>.\setup.ps1</code></pre>
+      <p>下載中途斷線沒關係 — 再跑一次就好，已經抓完的檔案會跳過，只補沒下載完的。</p>
+    </li>
+    <li>
+      <h3>啟動</h3>
+      <p>瀏覽器會自動打開 <code>http://127.0.0.1:7860</code>。不想開 PowerShell 的話，直接雙擊 <code>run.cmd</code> 也可以。</p>
+      <pre><code>.\run.ps1</code></pre>
+    </li>
+  </ol>
+
+  <h3>需要什麼</h3>
+  <ul>
+    <li>Windows 10／11 與 PowerShell（macOS、Linux、WSL 請改用 <code>./run.sh</code>）</li>
+    <li>Python 3.9 以上 — 沒有的話 <code>setup.ps1</code> 會嘗試自動安裝</li>
+    <li>約 2 GB 硬碟空間給內建模型，想試其他模型再多留幾 GB</li>
+    <li>NVIDIA 顯示卡<strong>可選</strong>。沒有也能跑，只是辨識那一段會慢一點</li>
+  </ul>
+
+  <h3>想用 GPU 加速</h3>
+  <p>裝好之後執行下面這行。它會檢查環境、裝 CUDA 版套件，然後實際載入模型試跑一次，確認真的能用才回報成功。想退回純 CPU 就加 <code>-Revert</code>。</p>
+  <pre><code>.\setup-gpu.ps1</code></pre>
+</section>
+
+<section>
+  <h2>速度</h2>
+  <p class="lede">以下都是實測值，測試機是 RTX 3070 Ti Laptop（8 GB）加 20 核心 CPU，錄音長度 5 分鐘。</p>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>階段</th><th>CPU</th><th>CUDA</th><th>實際採用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>語音辨識</td><td class="num">12.6 秒</td><td class="num win">0.9 秒</td><td>GPU，快 14 倍</td></tr>
+        <tr><td>講者分離</td><td class="num win">55.3 秒</td><td class="num">91.7 秒</td><td>CPU，GPU 反而慢</td></tr>
+        <tr><td>整條流程</td><td class="num">60.7 秒</td><td class="num">約 92 秒</td><td class="win">混合 44.8 秒</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>GPU 不是每一段都比較快。</strong>講者分離每次丟給模型的音訊長度都不一樣，而 CUDA 遇到新的輸入尺寸就要重新規劃一次，光這個成本就吃掉全部好處。所以工具讓辨識走 GPU、講者分離和 VAD 走 CPU，兩邊各取所長 — 這個組合比全 CPU 快、也比全 GPU 快得多。</p>
+
+  <p>同時處理多個會議是有效的：跑一個要 104 秒，同時跑兩個變成 78 秒。瓶頸在 CPU 而不是顯示卡，所以預設會同時跑 3 個。</p>
+</section>
+
+<section>
+  <h2>支援的格式與模型</h2>
+
+  <h3>音訊格式</h3>
+  <p><code>m4a</code>、<code>mp3</code>、<code>wav</code>、<code>flac</code>、<code>mp4</code>、<code>mov</code>、<code>wma</code>、<code>opus</code>、<code>webm</code>、<code>aac</code>、<code>amr</code>、<code>ogg</code>、<code>3gp</code> 等。內建 FFmpeg 函式庫，<strong>不需要另外安裝 ffmpeg</strong>。</p>
+
+  <h3>辨識模型</h3>
+  <p>內建 SenseVoice，開箱即用。另外還可以在介面裡下載 X-ASR Zipformer、FireRedASR2、Qwen3-ASR、Cohere Transcribe、Paraformer 等，各有擅長，換模型重跑一次就能比較。</p>
+  <p>模型清單裡的排名、WER 和下載數是<strong>執行時直接向 Hugging Face 取得</strong>的，不是寫死的數字。沒抓到資料時就不顯示，不會用猜的。</p>
+</section>
+
+<section>
+  <h2>常見問題</h2>
+
+  <h3>音檔會上傳到哪裡嗎？</h3>
+  <p>不會。所有運算都在你自己的電腦上完成，程式只在本機的 127.0.0.1 上聽，沒有雲端服務、沒有帳號。唯一會連網的時候是下載模型，還有抓模型排行榜資料。</p>
+
+  <h3>沒有顯示卡可以用嗎？</h3>
+  <p>可以。GPU 只加速辨識那一段，而那一段只佔整體約 2% 的時間。純 CPU 跑 5 分鐘錄音大約 60 秒。</p>
+
+  <h3>安裝時模型下載失敗</h3>
+  <p>再執行一次 <code>.\setup.ps1</code>。已經完成的檔案會跳過，只重抓沒下載完的。每個檔案都會驗證大小，抓到一半的檔案不會被當成正常的用。</p>
+
+  <h3>可以放到網路上給別人用嗎？</h3>
+  <p>目前的設計是單人本機使用，沒有登入機制，任何連得到那個連接埠的人都能看到全部逐字稿。要讓別人用之前，請先處理身分驗證與加密連線。</p>
+</section>
+
+<footer class="wrap">
+  <p>介面與文件都是繁體中文。原始碼與完整說明在 <a href="https://github.com/Joseph-tsai415/Voice_to_words">GitHub</a>。</p>
+  <p>建構於 <a href="https://github.com/k2-fsa/sherpa-onnx">sherpa-onnx</a>，使用 SenseVoice、pyannote segmentation、3D-Speaker 與 Silero VAD 模型。</p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,7 @@
+sherpa-onnx==1.13.6
+numpy>=2.0
+soundfile>=0.13
+soxr>=1.0
+av>=15.0
+flask>=3.0
+opencc-python-reimplemented>=0.1.7

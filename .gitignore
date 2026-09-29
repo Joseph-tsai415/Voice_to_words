@@ -1,0 +1,14 @@
+# 模型與虛擬環境都很大，不進版控
+.venv/
+models/
+*.tar.bz2
+
+# 使用者資料
+data/
+
+# 測試用的真實會議錄音與逐字稿（私人內容）
+tests/samples/
+
+__pycache__/
+*.py[cod]
+.DS_Store

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>會議逐字稿工具</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+</head>
+<body>
+
+<div id="topload" class="topload" hidden><div class="topload-bar"></div></div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🎙️</span>
+    <div>
+      <h1>會議逐字稿工具</h1>
+      <p class="sub">語音辨識 · 講者標記 · 逐句校正</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn ghost" id="btn-vocab">詞語修正</button>
+    <button class="btn ghost" id="btn-models">模型設定</button>
+    <button class="btn primary" id="btn-new">＋ 新增會議</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ─────────────────────────── 專案清單 ─────────────────────────── -->
+  <aside class="sidebar">
+    <h2 class="side-title">會議紀錄 <span id="queue-badge" class="queue-badge" hidden></span></h2>
+    <div id="project-list" class="project-list"></div>
+  </aside>
+
+  <!-- ─────────────────────────── 主要區域 ─────────────────────────── -->
+  <main class="main" id="main">
+
+    <section id="empty-state" class="empty">
+      <div class="empty-icon">🎧</div>
+      <h2>還沒有任何會議紀錄</h2>
+      <p>上傳一段錄音，工具會自動辨識內容並分辨講者，<br>接著你可以逐句校正誰在說話。</p>
+      <button class="btn primary big" id="btn-new-2">＋ 上傳錄音</button>
+    </section>
+
+    <section id="workspace" class="workspace" hidden>
+      <div class="ws-head">
+        <div class="ws-title">
+          <input id="project-name" class="name-input" spellcheck="false">
+          <div class="ws-meta" id="ws-meta"></div>
+        </div>
+        <div class="ws-tools">
+          <button class="btn ghost sm" id="btn-select-mode">選取模式</button>
+          <button class="btn ghost sm" id="btn-rerun">重新辨識</button>
+          <button class="btn ghost sm" id="btn-punct" title="替沒有標點的逐字稿補上標點，不用重跑辨識">加標點</button>
+          <button class="btn ghost sm" id="btn-export">匯出逐字稿</button>
+          <button class="btn danger-ghost sm" id="btn-delete-project">刪除</button>
+        </div>
+      </div>
+
+      <!-- 這個專案自己的狀態／進度（不是彈出視窗） -->
+      <div class="proj-status" id="proj-status" hidden></div>
+
+      <!-- 講者列：整體改名（Speaker 1 → Joseph） -->
+      <div class="speakers" id="speakers"></div>
+
+      <!-- 選取模式工具列 -->
+      <div class="bulkbar" id="bulkbar" hidden>
+        <span id="bulk-count">已選 0 句</span>
+        <span class="bulk-sep"></span>
+        <span>指定給：</span>
+        <div id="bulk-speakers" class="bulk-speakers"></div>
+        <button class="btn ghost sm" id="bulk-clear">清除選取</button>
+      </div>
+
+      <!-- 逐句對話框 -->
+      <div class="transcript" id="transcript"></div>
+
+      <!-- 這個專案的播放器：浮在畫面底部，捲動長逐字稿時一直看得到 -->
+      <div class="player" id="player" hidden>
+        <button class="play-btn" id="play-toggle" title="播放 / 暫停（空白鍵）">▶</button>
+        <span class="time" id="time-now">0:00</span>
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1">
+        <span class="time" id="time-total">0:00</span>
+        <label class="speed">
+          速度
+          <select id="rate">
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+        </label>
+        <label class="follow"><input type="checkbox" id="follow" checked> 跟隨播放</label>
+        <audio id="audio" preload="metadata"></audio>
+      </div>
+
+    </section>
+
+  </main>
+</div>
+
+<!-- ─────────────────────────── 新增會議 ─────────────────────────── -->
+<dialog id="dlg-new" class="dlg">
+  <form method="dialog" id="form-new">
+    <h2>新增會議</h2>
+
+    <label class="field">
+      <span>錄音檔</span>
+      <input type="file" id="f-audio" accept="{{ accept }}" multiple required>
+      <small>支援 m4a、mp3、wav、flac、mp4、wma、opus 等格式。<b>可以一次選多個檔案</b>，會依序排隊處理。</small>
+    </label>
+
+    <label class="field">
+      <span>會議名稱</span>
+      <input type="text" id="f-name" placeholder="留空則使用檔名">
+    </label>
+
+    <div class="field-row">
+      <label class="field">
+        <span>辨識模型</span>
+        <select id="f-model">
+          {# 開啟對話框時會由 refreshModelOptions() 依伺服器狀態重建 #}
+          {% for m in models %}
+          <option value="{{ m.key }}" {% if m.key == default_model %}selected{% endif %}>
+            {{ m.label }}{% if not m.downloaded %} — 需下載 {{ m.size_mb }} MB{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="field">
+        <span>講者人數</span>
+        <select id="f-speakers">
+          <option value="-1">自動偵測</option>
+          {% for n in range(2, 11) %}<option value="{{ n }}">{{ n }} 人</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div class="field-row">
+      <label class="field" id="lang-field" hidden>
+        <span>辨識語言</span>
+        <select id="f-language"></select>
+        <small id="lang-note"></small>
+      </label>
+    </div>
+
+    <div class="field-row">
+      <label class="field">
+        <span>中文轉換</span>
+        <select id="f-zh">
+          {% for key, label in zh_modes.items() %}
+          <option value="{{ key }}" {% if key == default_zh_mode %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span>每個專案用幾個執行緒</span>
+        <select id="f-threads">
+          {% for n in thread_choices %}
+          <option value="{{ n }}" {% if n == default_threads %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+        <small id="thread-note">你的 CPU 有 {{ cpu_count }} 核心，最多同時處理 {{ max_jobs }} 個專案
+               （{{ max_jobs }} × {{ default_threads }} ≈ {{ max_jobs * default_threads }} 核心）。</small>
+      </label>
+    </div>
+
+    <p class="hint" id="new-hint">知道人數就直接選，分辨講者會準很多。</p>
+
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="new-cancel">取消</button>
+      <button type="button" class="btn primary" id="new-start">開始辨識</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ─────────────────────────── 模型設定 ─────────────────────────── -->
+<dialog id="dlg-models" class="dlg wide">
+  <h2>辨識模型</h2>
+  <p class="hint">全部在本機 CPU 執行，不會上傳任何音訊。下載一次後就永久可用。</p>
+  <p class="hint" id="lb-source">讀取排名中…</p>
+  <div id="model-list" class="model-list"></div>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="models-close">關閉</button>
+  </div>
+</dialog>
+
+<!-- ─────────────────────────── 匯出 ─────────────────────────── -->
+<dialog id="dlg-export" class="dlg">
+  <h2>匯出逐字稿</h2>
+  <label class="field">
+    <span>格式</span>
+    <select id="x-format">
+      {% for key, meta in formats.items() %}
+      <option value="{{ key }}">{{ meta[0] }}（{{ meta[2] }}）</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="check"><input type="checkbox" id="x-timestamps" checked> 包含時間標記</label>
+  <label class="check"><input type="checkbox" id="x-merge" checked> 同一人連續發言合併成一段</label>
+  <div class="preview-wrap"><pre id="x-preview" class="preview">載入中…</pre></div>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="x-close">關閉</button>
+    <button type="button" class="btn ghost" id="x-copy">複製</button>
+    <button type="button" class="btn primary" id="x-download">下載</button>
+  </div>
+</dialog>
+
+<!-- ─────────────────────────── 整份重新辨識 ─────────────────────────── -->
+<dialog id="dlg-rerun" class="dlg">
+  <h2>重新辨識整份逐字稿</h2>
+  <p class="hint danger-hint">
+    目前的逐字稿、講者名字和所有手動修改<b>都會被清除</b>，用新設定從頭跑一次。
+    原始音檔會保留。
+  </p>
+
+  <div class="field-row">
+    <label class="field">
+      <span>辨識模型</span>
+      <select id="r-model"></select>
+    </label>
+    <label class="field">
+      <span>講者人數</span>
+      <select id="r-speakers">
+        <option value="-1">自動偵測</option>
+        {% for n in range(2, 11) %}<option value="{{ n }}">{{ n }} 人</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="field-row">
+    <label class="field" id="r-lang-field" hidden>
+      <span>辨識語言</span>
+      <select id="r-language"></select>
+    </label>
+    <label class="field">
+      <span>中文轉換</span>
+      <select id="r-zh">
+        {% for key, label in zh_modes.items() %}
+        <option value="{{ key }}" {% if key == default_zh_mode %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="r-cancel">取消</button>
+    <button type="button" class="btn primary" id="r-start">清除並重新辨識</button>
+  </div>
+</dialog>
+
+<!-- ─────────────────────── 單句重新辨識 ─────────────────────── -->
+<dialog id="dlg-split" class="dlg">
+  <h2>重新辨識這一句</h2>
+  <p class="hint">如果這一句其實是好幾個人講的，指定人數後會重新切分，
+     並依聲紋自動對回現有的講者。</p>
+  <div class="quote-box"><span id="s-text"></span></div>
+  <label class="field">
+    <span>這一句總共有幾個人說話</span>
+    <select id="s-speakers">
+      <option value="-1">自動偵測</option>
+      <option value="2" selected>2 人</option>
+      <option value="3">3 人</option>
+      <option value="4">4 人</option>
+      <option value="5">5 人</option>
+    </select>
+  </label>
+  <p class="hint" id="s-status"></p>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="s-cancel">取消</button>
+    <button type="button" class="btn primary" id="s-start">重新辨識</button>
+  </div>
+</dialog>
+
+<!-- ─────────────────────────── 詞語修正 ─────────────────────────── -->
+<dialog id="dlg-vocab" class="dlg wide">
+  <h2>詞語修正</h2>
+  <p class="hint">辨識常錯的人名、專有名詞寫在這裡，之後每次辨識都會自動修正。
+     一行一條，格式：<code>錯的字=對的字</code></p>
+  <textarea id="vocab-text" class="vocab-box" spellcheck="false"
+            placeholder="夢晴=孟青&#10;演安=宴安&#10;外媒體=外部媒體"></textarea>
+  <p class="hint" id="vocab-status"></p>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="vocab-close">關閉</button>
+    <button type="button" class="btn ghost" id="vocab-apply">套用到目前這份逐字稿</button>
+    <button type="button" class="btn primary" id="vocab-save">儲存</button>
+  </div>
+</dialog>
+
+<!-- ─────────────────────────── 錯誤 ─────────────────────────── -->
+<dialog id="dlg-error" class="dlg wide">
+  <h2 id="err-title">發生錯誤</h2>
+  <p class="hint">同樣的內容也印在瀏覽器主控台（F12 → Console）和伺服器視窗，可以直接複製。</p>
+  <div class="preview-wrap"><pre id="err-body" class="preview err-pre"></pre></div>
+  <div class="dlg-actions">
+    <button type="button" class="btn ghost" id="err-copy">複製錯誤訊息</button>
+    <button type="button" class="btn primary" id="err-close">關閉</button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

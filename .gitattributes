@@ -1,0 +1,13 @@
+# 這台機器的 core.autocrlf 會把工作目錄的檔案轉成 CRLF。
+# run.sh 帶著 CRLF 在 WSL / Linux 上會壞掉（bad interpreter: ...^M），
+# 所以 shell script 一律釘成 LF。
+*.sh        text eol=lf
+
+# PowerShell 與批次檔維持 Windows 慣例的 CRLF。
+# 注意 .ps1 另外必須存成「UTF-8 with BOM」：Windows PowerShell 5.1 會把
+# 沒有 BOM 的檔案當成 ANSI 讀，中文會變亂碼甚至解析失敗。
+*.ps1       text eol=crlf
+*.cmd       text eol=crlf
+
+# 模型是二進位，不要做任何行尾轉換。
+*.onnx      binary
