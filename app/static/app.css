@@ -174,6 +174,15 @@ body {
 .sent-check { margin-top: 5px; flex-shrink: 0; display: none; }
 .select-mode .sent-check { display: block; }
 
+/* Unlike .sent-tools this stays visible: playing one sentence is the main
+   loop when you are checking who said what, not an occasional action. */
+.sent-play {
+  flex-shrink: 0; margin-top: 1px; opacity: .4;
+  transition: opacity .12s, color .12s;
+}
+.sent:hover .sent-play { opacity: 1; }
+.sent.playing .sent-play { opacity: 1; color: var(--accent); }
+
 .sent-time {
   font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
   padding-top: 4px; flex-shrink: 0; cursor: pointer; min-width: 42px;
@@ -247,6 +256,12 @@ body {
 .btn.danger-ghost { background: transparent; color: var(--danger); border-color: transparent; }
 .btn.danger-ghost:hover { border-color: var(--danger); }
 .btn.sm { padding: 5px 11px; font-size: 12.5px; }
+/* Carries a count when the current text-fix rules would still change
+   something, so an out-of-date transcript is visible rather than silent. */
+.btn.attn {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 .btn.big { padding: 10px 20px; font-size: 15px; }
 .btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 

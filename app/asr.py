@@ -550,6 +550,26 @@ def _tidy_speakers(utterances: list[Utterance]) -> list[Utterance]:
     return fixed
 
 
+def split_utterances(utterances: list[Utterance]) -> list[Utterance]:
+    """Cut every utterance into the sentences inside it.
+
+    Must run *after* punctuation: the terminal marks are the boundaries, and
+    a recogniser that emits none leaves nothing to cut on. Utterances with a
+    single sentence are passed through untouched.
+    """
+    from . import sentences
+
+    out: list[Utterance] = []
+    for u in utterances:
+        pieces = sentences.split_span(u.start, u.end, u.text)
+        if len(pieces) == 1:
+            out.append(u)
+            continue
+        out.extend(Utterance(start, end, u.speaker, text)
+                   for start, end, text in pieces)
+    return out
+
+
 # --------------------------------------------------------------------------
 # Stage 4 - recognise each unit
 # --------------------------------------------------------------------------
@@ -703,6 +723,15 @@ def transcribe(samples: np.ndarray, model_key: str, *, num_speakers: int = -1,
                 n += 1
         if n:
             log.info("  標點還原：%d 句", n)
+
+    # With the marks in place, cut paragraphs into sentences. A segment is the
+    # unit the user edits and reassigns, so this is what makes per-sentence
+    # correction actually possible - before it, a 20-second VAD chunk was one
+    # indivisible row.
+    before = len(results)
+    results = split_utterances(results)
+    if len(results) != before:
+        log.info("  依標點切句：%d 句 → %d 句", before, len(results))
 
     log.info("  語音辨識完成：%d 句有內容（%.1f 秒），總計 %.1f 秒",
              len(results), time.time() - t_asr, time.time() - t_start)

@@ -87,7 +87,38 @@ def restore(text: str) -> str:
         return text
     for plain, wide in _WIDEN.items():
         out = out.replace(plain, wide)
-    return out.strip()
+    return collapse_marks(out.strip())
+
+
+# The model is trained on unpunctuated Simplified text, so a mark the
+# recogniser already wrote is invisible to it and it inserts its own right
+# beside it. Cohere emits a half-width "?", and a long sparsely punctuated
+# line slips under the density gate, so transcripts came back reading
+# "互相對於的？。" and "什麼 parameters。？首先".
+#
+# Collapsing afterwards is safer than stripping beforehand: stripping would
+# have to remove "." and ",", which would turn "3.5" into "35" and change the
+# words. This only ever deletes a mark that sits next to another one.
+_MARK_RANK = {"！": 4, "?": 4, "？": 4, "!": 4, "。": 3, "；": 2, ";": 2,
+              "，": 1, ",": 1, "、": 1, "：": 1, ":": 1}
+_MARK_RUN = re.compile(r"[，。？！、；：,.?!;:]{2,}")
+
+
+def collapse_marks(text: str) -> str:
+    """Reduce any run of adjacent punctuation to its strongest single mark."""
+    def pick(match: re.Match) -> str:
+        run = match.group(0)
+        return max(run, key=lambda ch: _MARK_RANK.get(ch, 0))
+
+    return _MARK_RUN.sub(pick, text)
+
+
+def needs_punctuation(text: str) -> bool:
+    """Whether restore_if_needed() would do anything - without loading a model.
+
+    Same gate, cheap half. Lets a caller count the work before doing it.
+    """
+    return bool(text) and _density(text) < 0.02
 
 
 def restore_if_needed(text: str) -> str:

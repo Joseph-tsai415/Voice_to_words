@@ -8,11 +8,11 @@ if [ -x ".venv/Scripts/python.exe" ]; then
 elif [ -x ".venv/bin/python" ]; then
   PY=".venv/bin/python"
 else
-  echo "  建立虛擬環境 ..."
-  python3 -m venv .venv || python -m venv .venv
+  # setup.sh 會建立 .venv、裝套件，並把模型抓下來。少了模型也是啟動不了的，
+  # 所以不要在這裡自己裝一半。
+  echo "  尚未安裝，先執行 setup.sh ..."
+  bash ./setup.sh
   PY=$([ -x ".venv/bin/python" ] && echo ".venv/bin/python" || echo ".venv/Scripts/python.exe")
-  "$PY" -m pip install --upgrade pip --quiet
-  "$PY" -m pip install -r requirements.txt --quiet
 fi
 
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8

@@ -12,7 +12,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from . import (asr, export, gpu, hub, leaderboard, memory,
-               project as store, punctuation, rework, vocabulary)
+               project as store, punctuation, rework, tidy, vocabulary)
 from .audio import SUPPORTED_SUFFIXES, probe_duration
 from .config import (ASR_MODELS, BUBBLE_GAP_SEC, CPU_COUNT,
                      DEFAULT_MODEL, DEFAULT_THREADS, MAX_CONCURRENT_JOBS,
@@ -323,7 +323,32 @@ def create_app() -> Flask:
             return jsonify(error=str(exc)), 404
         proj["bubbles"] = store.bubbles(proj, BUBBLE_GAP_SEC)
         proj["job"] = tq.status(pid)
+        # What the text fixes would still change. A transcript is only correct
+        # for the rules that existed when it ran, so an older project needs to
+        # be able to say it is out of date rather than quietly staying wrong.
+        proj["pending"] = tidy.pending(proj)
         return jsonify(proj)
+
+    @app.post("/api/projects/<pid>/tidy")
+    def api_project_tidy(pid: str) -> Response:
+        """Re-run every text fix over a finished transcript.
+
+        Vocabulary, then punctuation, then sentence splitting - the order they
+        depend on each other in. Hand-edited sentences are left alone.
+        """
+        try:
+            proj = store.load(pid)
+        except FileNotFoundError as exc:
+            return jsonify(error=str(exc)), 404
+
+        counts = tidy.apply_all(proj)
+        if counts["total"]:
+            store.save(proj)
+        proj["bubbles"] = store.bubbles(proj, BUBBLE_GAP_SEC)
+        proj["job"] = tq.status(pid)
+        proj["pending"] = tidy.pending(proj)
+        log.info("專案 %s 整理逐字稿：%s", pid, counts)
+        return jsonify(project=proj, counts=counts)
 
     @app.delete("/api/projects/<pid>")
     def api_project_delete(pid: str) -> Response:

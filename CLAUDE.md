@@ -23,16 +23,19 @@ error messages, and comments in templates/JS are all zh-Hant.
 .\run.ps1 pull <model-key>
 .\run.ps1 run <audio> -s 2 -f srt -o out.srt
 .venv\Scripts\python.exe tests\test_e2e.py     # full end-to-end suite
-.venv\Scripts\python.exe tests\test_textfixes.py   # length cap, role gate, punctuation
+.venv\Scripts\python.exe tests\test_textfixes.py   # length cap, role gate, punctuation, splitting
+.venv\Scripts\python.exe tests\test_tidy.py        # re-running the text fixes on a saved project
 ```
 
-`run.sh` is the bash/WSL equivalent; `run.cmd` is the double-click entry point.
+`run.sh` / `setup.sh` are the bash/WSL equivalents; `run.cmd` is the
+double-click entry point. The two setup scripts carry the **same model list and
+the same byte counts** — change one and you must change the other.
 There is no lint/typecheck config and no unit-test framework — each file under
 `tests/` is a self-contained script run directly. `test_e2e.py` boots its own
 server on a free port, synthesises two-speaker audio with Windows SAPI, and
 asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
-`test_memory`, `test_textfixes`) need no audio and run in seconds.
+`test_memory`, `test_textfixes`, `test_tidy`) need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
 compete for the same 8 GB of VRAM and the loser dies of CUDA OOM.
@@ -227,8 +230,10 @@ that matter, each of which fixed an observed misassignment:
 
 ## Text fixes that don't touch the audio
 
-Two passes run over the finished transcript, and both are also exposed as
-buttons so an existing project can be fixed without decoding anything again.
+Three passes run over the finished transcript, and all are re-runnable from
+one button so an existing project can be fixed without decoding anything again.
+**The order is a dependency, not a preference**: vocabulary works on words,
+punctuation needs the final words, and sentence splitting needs the marks.
 
 * **Punctuation** ([app/punctuation.py](app/punctuation.py)). Half the catalogue
   returns no punctuation at all — a Cohere Transcribe meeting came back as 7,797
@@ -240,8 +245,40 @@ buttons so an existing project can be fixed without decoding anything again.
 * **Vocabulary** ([app/vocabulary.py](app/vocabulary.py)). Longest pattern wins.
   Anchor rules on context — a bare `定時 -> 定序` would corrupt every legitimate
   "timed" in an unrelated meeting, so the shipped rules read `定時結果`.
+* **Sentence splitting** ([app/sentences.py](app/sentences.py)). A segment is a
+  VAD chunk intersected with a diarization turn — however much someone said
+  between two pauses, which is usually a paragraph. On a real 25-minute meeting
+  41 of 118 segments ran past 80 characters and the longest was 357 across 60
+  seconds. That defeats the whole point of intersecting diarization with ASR:
+  you cannot hand the third sentence back to another speaker when the paragraph
+  is one row. Splitting on terminal marks alone still left 24 rows past 80,
+  because the punctuation model writes commas far more freely than full stops,
+  so anything still over `SENTENCE_MAX_CHARS` is cut again at clause marks.
+  Measured end to end on that meeting: longest row 357 → 80 characters, rows
+  past 80 41 → 3, longest 60.2s → 15.4s. A half-width `.` is deliberately not a
+  boundary — in a technical meeting it is a decimal point far more often than a
+  full stop — and a run with no punctuation at all is left long, because a
+  mid-word cut reads worse than a long row.
 
-Both skip sentences carrying `edited`: the user's own wording always wins.
+All three skip sentences carrying `edited`: the user's own wording always wins.
+
+Splitting **must** run after punctuation. Before the punctuation pass only 12
+of those 118 segments carried an internal terminal mark; there was nothing to
+cut on.
+
+[app/tidy.py](app/tidy.py) runs all three over a saved project and is what
+`POST /api/projects/<pid>/tidy` calls. This exists because the passes run at
+the end of recognition, which makes a transcript correct only for the rules
+that existed *then* — a rule matching `定時結果` sat in the vocabulary list
+while the saved transcript still read `定時結果`, because the fix was a button
+nobody had pressed. `tidy.pending()` reports what the current rules would still
+change and rides along on `GET /api/projects/<pid>`, so the button can carry a
+count instead of the project staying quietly wrong. **`pending()` must never
+touch the punctuation model** — it runs on every project load, and a 260-segment
+project would mean 260 inferences per request; it predicts that pass from
+`punctuation.needs_punctuation()`, the cheap half of the same density gate.
+Splitting is idempotent, so pressing the button twice does not shred the
+transcript — `test_tidy.py` holds that line.
 
 `punct-ct-transformer` sits in `ASR_MODELS` so it downloads through the same
 machinery as everything else, but carries `"role": "punct"`. Anything that picks
@@ -329,6 +366,26 @@ zero. A non-empty `.part` is therefore progress worth keeping:
 `hub.cleanup_partials()` removes only empty ones at startup.
 
 ## Things that will bite you
+
+- **The punctuation model cannot see marks that are already there.** It is
+  trained on unpunctuated Simplified text, so a mark the recogniser emitted is
+  invisible to it and it inserts its own right beside it. Cohere writes a
+  half-width `?`, and a long sparsely punctuated line slips under the density
+  gate, so real transcripts read `互相對於的？。` and `什麼 parameters。？首先`.
+  `collapse_marks()` reduces any run of adjacent marks to the strongest one,
+  *after* inference. Do not "fix" this by stripping punctuation before the
+  model instead — that would have to strip `.` and `,`, turning `3.5` into
+  `35` and changing the words, which the whole pass is forbidden from doing.
+- **`.sent-play` is an `.icon-btn`, and the tools loop binds by class.** The
+  per-sentence play button shares the `icon-btn` class with the row's tool
+  buttons, so `$$('.icon-btn', el)` bound the rerun/split/merge/delete handler
+  straight over the play handler and the button silently did nothing. The
+  selector is scoped to `.sent-tools .icon-btn` for that reason.
+- **The browser cannot play a project that has no `audio.wav`.** Obvious in
+  hindsight, but a test fixture built by copying only `project.json` reports
+  `NotSupportedError: The element has no supported sources`, which looks
+  exactly like an autoplay-policy rejection. Check `audio.error` before
+  concluding anything about user activation.
 
 - **Simplified vs Traditional**: SenseVoice, Paraformer and FireRedASR emit Simplified
   regardless of what was spoken. `textproc.clean()` runs OpenCC (`s2twp` by default).

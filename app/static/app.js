@@ -294,7 +294,8 @@ function renderSentence(seg) {
 
   el.innerHTML = `
     <input type="checkbox" class="sent-check">
-    <span class="sent-time" title="從這裡播放">${fmt(seg.start)}</span>
+    <button class="icon-btn sent-play" title="只播這一句，播完就停（校對講者時最好用）">▶</button>
+    <span class="sent-time" title="從這裡接著往下播">${fmt(seg.start)}</span>
     <div class="sent-text" contenteditable="plaintext-only" spellcheck="false"></div>
     <select class="sent-spk" title="這句是誰說的"></select>
     <div class="sent-tools">
@@ -336,7 +337,19 @@ function renderSentence(seg) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); text.blur(); }
   };
 
-  $('.sent-time', el).onclick = () => playFrom(seg.start, seg.end);
+  // Two different jobs, so two different controls. The button plays exactly
+  // this sentence and stops - which is the loop you are in when checking who
+  // said what. The timestamp seeks here and keeps going, for reading along.
+  $('.sent-play', el).onclick = (e) => {
+    e.stopPropagation();
+    const audio = $('#audio');
+    const playingThis = !audio.paused
+      && audio.currentTime >= seg.start && audio.currentTime < seg.end;
+    if (playingThis) { audio.pause(); return; }
+    playFrom(seg.start, seg.end);
+  };
+
+  $('.sent-time', el).onclick = () => playFrom(seg.start, null);
 
   $('.sent-check', el).onchange = (e) => {
     if (e.target.checked) state.picked.add(seg.id); else state.picked.delete(seg.id);
@@ -353,7 +366,9 @@ function renderSentence(seg) {
     cb.dispatchEvent(new Event('change'));
   };
 
-  $$('.icon-btn', el).forEach((btn) => {
+  // Scoped to .sent-tools on purpose: the play button is an .icon-btn too,
+  // and a bare '.icon-btn' would bind this handler over its own.
+  $$('.sent-tools .icon-btn', el).forEach((btn) => {
     btn.onclick = async () => {
       const act = btn.dataset.act;
       if (act === 'rerun') {
@@ -473,6 +488,7 @@ async function openProject(id) {
     }
     updateMeta();
     updateBulkBar();
+    updateTidyBadge();
 
     loadProjects();
     if (isBusy(meta)) startProjectPolling();
@@ -497,6 +513,20 @@ function updateMeta() {
   $('#time-total').textContent = fmt(p.duration);
 }
 
+/* A transcript is only correct for the rules that existed when it ran. The
+   server counts what the current rules would still change, so an older
+   project can say so instead of quietly staying wrong. */
+function updateTidyBadge() {
+  const btn = $('#btn-tidy');
+  if (!btn) return;
+  const n = state.project?.pending?.total || 0;
+  btn.textContent = n ? `整理逐字稿 ${n}` : '整理逐字稿';
+  btn.classList.toggle('attn', n > 0);
+  btn.title = n
+    ? `有 ${n} 句可以依目前的詞語修正、標點與斷句規則整理`
+    : '用目前的詞語修正、標點與斷句規則整理一次，不用重跑辨識';
+}
+
 /* ---------------------------------------------------------------- player */
 let stopAt = null;
 
@@ -513,7 +543,10 @@ function initPlayer() {
 
   $('#play-toggle').onclick = () => (audio.paused ? audio.play() : audio.pause());
   audio.onplay  = () => { $('#play-toggle').textContent = '⏸'; };
-  audio.onpause = () => { $('#play-toggle').textContent = '▶'; };
+  audio.onpause = () => {
+    $('#play-toggle').textContent = '▶';
+    for (const b of $$('.sent-play')) b.textContent = '▶';
+  };
 
   audio.ontimeupdate = () => {
     const t = audio.currentTime;
@@ -527,6 +560,8 @@ function initPlayer() {
     for (const el of $$('.sent')) {
       const on = t >= +el.dataset.start && t < +el.dataset.end;
       el.classList.toggle('playing', on);
+      const btn = el.querySelector('.sent-play');
+      if (btn) btn.textContent = on && !audio.paused ? '⏸' : '▶';
       if (on) active = el;
     }
     if (active && $('#follow').checked) {
@@ -1161,18 +1196,28 @@ function initVocabulary() {
     } catch (err) { showError('儲存失敗', err); }
   };
 
-  $('#btn-punct').onclick = async () => {
+  $('#btn-tidy').onclick = async () => {
     if (!state.projectId) return;
-    // Re-punctuating costs a few seconds on saved text - no audio is decoded.
+    // Works on the saved text - a few seconds, no audio is decoded.
+    const btn = $('#btn-tidy');
+    btn.disabled = true;
+    btn.textContent = '整理中…';
     try {
-      const res = await api(`/api/projects/${state.projectId}/apply-punctuation`,
+      const res = await api(`/api/projects/${state.projectId}/tidy`,
                             { method: 'POST' });
       state.project = res.project;
       renderSpeakers();
       renderTranscript();
-      toast(res.changed ? `已為 ${res.changed} 句補上標點`
-                        : '每一句都已經有標點了');
-    } catch (err) { showError('加標點失敗', err); }
+      const c = res.counts;
+      toast(c.total
+        ? `已整理：詞語 ${c.vocabulary} 句、標點 ${c.punctuation} 句、切句 ${c.split} 句`
+        : '已經是最新的了，沒有需要修改的地方');
+    } catch (err) {
+      showError('整理逐字稿失敗', err);
+    } finally {
+      btn.disabled = false;
+      updateTidyBadge();
+    }
   };
 
   $('#vocab-apply').onclick = async () => {

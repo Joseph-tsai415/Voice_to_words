@@ -25,10 +25,14 @@
 ### bash / WSL / macOS / Linux
 
 ```bash
-./run.sh
+./setup.sh     # 只需執行一次：建立 .venv、安裝套件、下載模型（約 1 GB）
+./run.sh       # 啟動
 ```
 
+直接跑 `./run.sh` 也可以，沒裝好的話它會先幫你叫 `setup.sh`。
+
 `setup.ps1` 會自己找 Python；找不到時會用 `winget` 安裝 Python 3.12，再自動裝好所有 pip 套件。
+兩個安裝腳本抓的模型完全一樣，也都會核對檔案大小，下載到一半的檔案不會被當成正常的用。
 
 ---
 
@@ -51,7 +55,9 @@
 | 重新辨識這句 | 🔁 | **一句裡有好幾個人講話時用**，見下方 |
 | 切成兩句 | 游標放在要切的位置 → ✂ | 手動切，位置自己決定 |
 | 合併 | ⭳ | 一句話被切太碎時用 |
-| 播放該句 | 點左邊的時間 | 只播這一句，聽完自動停 |
+| 播放該句 | 每句左邊的 ▶ | **只播這一句，播完就停**；校對講者時最好用，播放中會變成 ⏸，再按一次停 |
+| 從這裡接著播 | 點左邊的時間 | 從這句開始一直往下播 |
+| 整理逐字稿 | 上方「整理逐字稿」 | 依目前的詞語修正、標點與斷句規則重整一次，不用重跑辨識。有東西可整理時按鈕會顯示數量 |
 | 播放器 | 浮在專案畫面底部 | 逐字稿再長也一直看得到；切換專案會跟著換 |
 | 鍵盤 | 空白鍵播放/暫停、←→ 快轉 3 秒（+Shift 為 10 秒） | |
 
@@ -253,8 +259,7 @@ $env:SCRIBE_DIARIZE_PROVIDER = "cuda"    # 講者分離也用 GPU（實測較慢
 ```powershell
 $env:SCRIBE_JOBS = 4      # 同時處理 4 個專案
 $env:SCRIBE_THREADS = 4   # 每個用 4 執行緒
-.
-un.ps1
+.\run.ps1
 ```
 
 同一個模型只會載入**一份**並由所有專案共用，所以同時跑 3 個不會吃 3 倍記憶體。
@@ -383,7 +388,8 @@ Voice_to_words/
 .venv\Scripts\python.exe tests\test_downloads.py   # 下載佇列、續傳、檔案完整性
 .venv\Scripts\python.exe tests\test_rework.py      # 重新辨識、聲紋比對
 .venv\Scripts\python.exe tests\test_memory.py      # 記憶體查詢與模型上限
-.venv\Scripts\python.exe tests\test_textfixes.py   # 長度上限、附加元件擋關、標點
+.venv\Scripts\python.exe tests\test_textfixes.py   # 長度上限、附加元件擋關、標點、斷句
+.venv\Scripts\python.exe tests\test_tidy.py        # 舊逐字稿套用目前的文字修正
 ```
 
 每個檔案都是獨立的腳本，直接執行即可，沒有測試框架。

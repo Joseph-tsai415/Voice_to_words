@@ -94,6 +94,12 @@ BUBBLE_GAP_SEC = 1.20
 VAD_MIN_SILENCE_SEC = 0.35
 VAD_MIN_SPEECH_SEC = 0.20
 VAD_MAX_SPEECH_SEC = 20.0
+# Longest sentence left as one segment before it is cut at a clause boundary.
+# A VAD chunk is however much someone said between two pauses, so it is often
+# a paragraph: on a real 25-minute meeting, 41 of 118 segments ran past 80
+# characters and the longest was 357. A segment is the unit the user edits and
+# reassigns, so an unreadable one defeats the point of per-sentence attribution.
+SENTENCE_MAX_CHARS = 80
 
 # --- ASR catalogue ---------------------------------------------------------
 # Every entry runs on CPU through sherpa-onnx. `files` maps a logical role to a
