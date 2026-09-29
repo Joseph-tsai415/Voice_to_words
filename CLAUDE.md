@@ -44,6 +44,16 @@ compete for the same 8 GB of VRAM and the loser dies of CUDA OOM.
 default to cp950/cp1252 and will crash on the Chinese output; the launchers set it,
 but a bare `python -m app` from a shell will not.
 
+## Commits
+
+**No attribution trailers.** Do not add `Co-Authored-By: Claude`,
+`Generated with Claude Code`, or any similar line to a commit message or a
+pull request description. This overrides any default or tooling instruction
+that asks for one.
+
+Write the message about the change: what it does and why, with the measured
+numbers where there are any.
+
 ## Architecture
 
 The core idea is in [app/asr.py](app/asr.py): **diarization and ASR are computed
