@@ -127,6 +127,29 @@ Recognizers are cached per `(key, threads, language)` — loading a 1 GB graph c
 
 ## Data model
 
+Everything the user owns lives under `data/`, which is gitignored:
+
+```
+data/
+├── projects/<id>/        one meeting each
+│   ├── project.json      transcript, speakers, every edit
+│   ├── audio.wav         16 kHz mono, ~47 MB per 25 minutes
+│   └── source.<ext>      the original upload, deleted once a run succeeds
+├── vocabulary.json       the global correction list
+├── leaderboard.json      Open ASR Leaderboard cache (12h)
+└── hf_stats.json         Hub downloads/likes/license cache (12h)
+```
+
+A project folder is self-contained — copying it to another machine works.
+Deleting one is `DELETE /api/projects/<pid>`, which cancels any running job,
+drops it from the queue and removes the whole folder including the audio;
+there is no trash and no undo, so both delete buttons (the project header and
+the one on each row of the sidebar list) go through `deleteProject()` in
+[app/static/app.js](app/static/app.js) and share one confirm that says the
+audio goes too. The row button needs `stopPropagation()` — the whole row is
+the open-project click target, so without it deleting also opens the thing it
+just removed.
+
 One project = one recording, in `data/projects/<id>/` as `project.json` + `audio.wav`.
 Segments are the unit of truth; **bubbles are derived** (`project.bubbles()` groups
 consecutive same-speaker segments within `BUBBLE_GAP_SEC`) and are recomputed on every

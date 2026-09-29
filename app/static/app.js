@@ -167,6 +167,7 @@ function projectRow(p) {
     <div class="pitem-top">
       <div class="pitem-name"></div>
       <span class="pill ${style.cls}">${style.label}</span>
+      <button class="pitem-del" title="刪除這場會議">🗑</button>
     </div>
     <div class="pitem-meta">
       <span>${p.duration ? fmt(p.duration) : '—'}</span>
@@ -183,8 +184,43 @@ function projectRow(p) {
         ? `排隊中（前面 ${job.position} 個）`
         : `${job.stage_label || '準備中'} ${pct}%` + (job.eta ? `　剩約 ${fmt(job.eta)}` : '');
   }
+  // stopPropagation: the whole row opens the project, so without this the
+  // delete click would also open the thing it just removed.
+  $('.pitem-del', el).onclick = (e) => {
+    e.stopPropagation();
+    deleteProject(p.id, p.name);
+  };
+
   el.onclick = () => openProject(p.id);
   return el;
+}
+
+function closeWorkspace() {
+  state.projectId = null;
+  state.project = null;
+  $('#proj-status').hidden = true;
+  $('#workspace').hidden = true;
+  $('#player').hidden = true;
+  $('#empty-state').hidden = false;
+  $('#audio').pause();
+}
+
+/* Deleting takes the audio with it and there is no undo, so it always asks.
+   Shared by the list button and the one in the project header - two confirm
+   dialogs that could drift apart is exactly how one of them ends up not
+   mentioning the audio. */
+async function deleteProject(id, name) {
+  if (!confirm(`刪除「${name}」？\n逐字稿和音檔都會一起刪掉，無法復原。`)) return false;
+  try {
+    await api(`/api/projects/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    showError('刪除失敗', err);
+    return false;
+  }
+  if (state.projectId === id) closeWorkspace();
+  await loadProjects();
+  toast(`已刪除「${name}」`);
+  return true;
 }
 
 /* ------------------------------------------------------------- rendering */
@@ -1311,18 +1347,8 @@ function init() {
   };
   $('#project-name').onkeydown = (e) => { if (e.key === 'Enter') e.target.blur(); };
 
-  $('#btn-delete-project').onclick = async () => {
-    if (!confirm(`刪除「${state.project.name}」？此動作無法復原。`)) return;
-    await api(`/api/projects/${state.projectId}`, { method: 'DELETE' });
-    state.projectId = null; state.project = null;
-    $('#proj-status').hidden = true;
-    $('#workspace').hidden = true;
-    $('#player').hidden = true;
-    $('#empty-state').hidden = false;
-    $('#audio').pause();
-    loadProjects();
-    toast('已刪除');
-  };
+  $('#btn-delete-project').onclick = () =>
+    deleteProject(state.projectId, state.project.name);
 
   api('/api/capacity').then((cap) => { window.__CAP__ = cap; updateThreadNote(); })
                      .catch((err) => logError('讀取 CPU 設定失敗', err));

@@ -356,6 +356,15 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 }
 
 .pitem-top { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+/* Hidden until hover: deleting a meeting is irreversible, so it should not
+   sit under the cursor of someone browsing the list. */
+.pitem-del {
+  border: none; background: transparent; color: var(--ink-3); cursor: pointer;
+  border-radius: 6px; padding: 2px 4px; font-size: 12px; line-height: 1;
+  flex-shrink: 0; opacity: 0; transition: opacity .12s, color .12s;
+}
+.pitem:hover .pitem-del, .pitem.active .pitem-del { opacity: .65; }
+.pitem-del:hover { opacity: 1; color: var(--danger); background: var(--line-2); }
 .pitem.busy { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
 .pitem-stage { font-size: 10.5px; color: var(--ink-3); margin-top: 3px; }
 

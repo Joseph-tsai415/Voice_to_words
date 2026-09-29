@@ -328,19 +328,33 @@ Voice_to_words/
 │   ├── speaker-embedding.onnx  講者聲紋（3D-Speaker ERes2Net）
 │   ├── sense-voice/            內建辨識模型
 │   └── hub/                    你下載的模型
-├── data/projects/<id>/     每場會議一個資料夾
-│   ├── project.json            逐字稿與所有編輯
-│   └── audio.wav               轉好的 16 kHz 音訊
+├── data/                   你的資料，全部在這裡
+│   ├── projects/<id>/          每場會議一個資料夾
+│   │   ├── project.json            逐字稿、講者、所有編輯
+│   │   ├── audio.wav               轉好的 16 kHz 音訊（25 分鐘約 47 MB）
+│   │   └── source.<ext>            原始上傳檔，辨識成功後會自動刪掉
+│   ├── vocabulary.json         詞語修正表
+│   ├── leaderboard.json        模型排行榜快取（12 小時）
+│   └── hf_stats.json           Hugging Face 下載數快取（12 小時）
 └── tests/                  測試
     ├── test_e2e.py             完整流程（需要音訊合成，會佔用顯示卡）
     ├── test_queue.py           辨識佇列
     ├── test_downloads.py       下載佇列
     ├── test_rework.py          重新辨識與聲紋
     ├── test_memory.py          記憶體查詢
-    └── test_textfixes.py       標點與詞語修正
+    ├── test_textfixes.py       標點、詞語修正與斷句
+    └── test_tidy.py            舊逐字稿套用目前的文字修正
 ```
 
 每個會議資料夾是自足的，整包複製到別台電腦也能用。
+**備份只要複製 `data/`** —— 模型隨時可以重新下載，`data/` 才是刪掉就沒有的東西。
+
+### 刪除會議
+
+兩個地方都可以刪：左側清單每一列滑過去會出現 🗑，或是打開專案後按右上角的「刪除」。
+
+**逐字稿和音檔會一起刪掉，而且沒有垃圾桶、救不回來**，所以按下去前一定會再問一次。
+正在辨識中的專案也可以直接刪，工作會先被取消。
 
 ---
 
