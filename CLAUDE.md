@@ -85,7 +85,7 @@ server on a free port, synthesises two-speaker audio with Windows SAPI, and
 asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
 `test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`,
-`test_setup_matches_config`, `test_delete`)
+`test_setup_matches_config`, `test_delete`, `test_audio_kept`)
 need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
@@ -145,6 +145,18 @@ data/
 ├── leaderboard.json      Open ASR Leaderboard cache (12h)
 └── hf_stats.json         Hub downloads/likes/license cache (12h)
 ```
+
+**A successful run deletes its source file — and a re-run's source is
+`audio.wav`.** The worker ends with `source.unlink()` because `source.<ext>`
+is redundant once the wav is written. But `_rerun_source()` deliberately
+hands a re-run **audio.wav itself**, since the upload is already gone by
+then, so `source` and the project's only copy of the recording were the same
+file: **every successful 重新辨識 deleted the audio**, leaving a transcript
+that could never be re-run. Both `/retry` and `/reprocess` go through
+`_rerun_source`, so both did it. Guarded by `disposable_upload()`, which
+only ever deletes a file actually named `source...` and never the wav.
+`test_audio_kept.py` covers the predicate and `test_e2e.py` now re-runs a
+project and checks the audio is still served afterwards.
 
 **`delete()` must not use `ignore_errors=True`.** On Windows the browser holds
 `audio.wav` open for playback, so `rmtree` removed `project.json`, hit the

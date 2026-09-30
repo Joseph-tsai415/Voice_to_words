@@ -283,6 +283,25 @@ def main() -> int:
         status, _ = request("GET", f"{base}/api/projects/{pid}/audio")
         check("音檔可播放", status == 200)
 
+        # A re-run is fed audio.wav as its source, and the worker deletes its
+        # source when it finishes - which used to delete the only copy of the
+        # recording. Run it again and check the audio is still there.
+        status, _ = request("POST", f"{base}/api/projects/{pid}/retry")
+        check("可以重新辨識", status == 200, str(status))
+        deadline = time.time() + 240
+        state = None
+        while time.time() < deadline:
+            _, listing = request("GET", base + "/api/projects")
+            row = next((p for p in listing["items"] if p["id"] == pid), None)
+            state = row and row["status"]
+            if state in ("ready", "error"):
+                break
+            time.sleep(1)
+        check("重新辨識跑完", state == "ready", str(state))
+        status, _ = request("GET", f"{base}/api/projects/{pid}/audio")
+        check("重新辨識後音檔還在（不能把來源音檔刪掉）", status == 200, str(status))
+        _, proj = request("GET", f"{base}/api/projects/{pid}")
+
         # -------------------------------------------- 講者改名 (Speaker 1 -> Joseph)
         if len(proj["speakers"]) < 2:
             _, proj = request("POST", f"{base}/api/projects/{pid}/speakers",

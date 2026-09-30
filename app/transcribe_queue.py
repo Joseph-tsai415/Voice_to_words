@@ -63,6 +63,25 @@ _FIXED_WEIGHT = STAGE_WEIGHTS["decode"] + STAGE_WEIGHTS["load"]
 _TERMINAL = frozenset({"save", "done"})
 
 
+def disposable_upload(source: Path, wav: Path) -> bool:
+    """Whether `source` is the throwaway upload rather than the recording.
+
+    The worker deletes its source file once a run succeeds, because
+    `source.<ext>` is redundant as soon as `audio.wav` has been written. But
+    `_rerun_source()` deliberately feeds a re-run **audio.wav itself** - the
+    upload is long gone by then - so source and the project's only copy of
+    the recording were the same file, and every successful 重新辨識 deleted
+    it. Seen twice on a live install: a project left with a transcript and no
+    audio, and so no way to ever run it again.
+
+    Only a file actually named `source...` is disposable, and never the wav,
+    compared case-insensitively because Windows paths are.
+    """
+    if source.name.lower() == wav.name.lower() and source.parent == wav.parent:
+        return False
+    return source.stem.lower() == "source" or source.name.lower() == "source"
+
+
 def _overall(stage: str, frac: float) -> float:
     if stage in _TERMINAL:
         return 1.0
@@ -352,7 +371,10 @@ class TranscriptionQueue:
             # Same cluster list as the partial writes used, so the speaker
             # numbering does not shift when the final version lands.
             store.populate(project_id, utterances, seen_clusters or None)
-            source.unlink(missing_ok=True)
+            # Not an unconditional unlink: a re-run is handed audio.wav as its
+            # source, so this used to delete the project's only recording.
+            if disposable_upload(source, wav):
+                source.unlink(missing_ok=True)
 
         except _Cancelled:
             with self._guard:
