@@ -153,12 +153,20 @@ fi
 # 模型太大不進版控，第一次安裝時從上游抓。每個大小都是對過的實際位元組數，
 # 下載完會驗證；大小不符就當作失敗，不留下一個壞掉的檔案。
 HF='https://huggingface.co'
+XASR="$HF/csukuangfj2/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03/resolve/main"
 models=(
   "models/silero_vad.onnx|https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx|643854"
   "models/segmentation/model.onnx|$HF/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx?download=true|5992913"
   "models/speaker-embedding.onnx|$HF/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx?download=true|39593761"
-  "models/sense-voice/tokens.txt|$HF/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt?download=true|315894"
-  "models/sense-voice/model.onnx|$HF/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.onnx?download=true|937617178"
+  # The default recogniser: X-ASR, not SenseVoice. Measured on a real
+  # bilingual seminar it recovered 9 of 13 technical terms against
+  # SenseVoice's 5, and it is 176 MB instead of 940 MB - so the whole install
+  # drops from about 1 GB to about 220 MB. SenseVoice stays in the catalogue
+  # and downloads on demand for 日/韓/粵.
+  "models/hub/x-asr-zipformer-punct/tokens.txt|$XASR/tokens.txt?download=true|58806"
+  "models/hub/x-asr-zipformer-punct/joiner-epoch-99-avg-1.int8.onnx|$XASR/joiner-epoch-99-avg-1.int8.onnx?download=true|2581422"
+  "models/hub/x-asr-zipformer-punct/decoder-epoch-99-avg-1.onnx|$XASR/decoder-epoch-99-avg-1.onnx?download=true|11309084"
+  "models/hub/x-asr-zipformer-punct/encoder-epoch-99-avg-1.int8.onnx|$XASR/encoder-epoch-99-avg-1.int8.onnx?download=true|161744450"
 )
 
 filesize() { wc -c < "$1" | tr -d ' '; }
@@ -190,7 +198,7 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-echo '  檢查模型檔案（第一次要下載約 1 GB，之後會跳過）…'
+echo '  檢查模型檔案（第一次要下載約 220 MB，之後會跳過）…'
 failed=()
 for entry in "${models[@]}"; do
   IFS='|' read -r path url want <<< "$entry"

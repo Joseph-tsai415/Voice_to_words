@@ -189,6 +189,8 @@ if ($Cpu) {
 # --- 5. 模型 ---------------------------------------------------------------
 # 模型太大不進版控，第一次安裝時從上游抓。每個大小都是對過的實際位元組數，
 # 下載完會驗證；大小不符就當作失敗，不留下一個壞掉的檔案。
+$XASR = 'https://huggingface.co/csukuangfj2/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03/resolve/main'
+
 $models = @(
     @{ Path = 'models\silero_vad.onnx'
        Url  = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx'
@@ -199,12 +201,23 @@ $models = @(
     @{ Path = 'models\speaker-embedding.onnx'
        Url  = 'https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx?download=true'
        Size = 39593761 }
-    @{ Path = 'models\sense-voice\tokens.txt'
-       Url  = 'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt?download=true'
-       Size = 315894 }
-    @{ Path = 'models\sense-voice\model.onnx'
-       Url  = 'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.onnx?download=true'
-       Size = 937617178 }
+    # The default recogniser: X-ASR, not SenseVoice. Measured on a real
+    # bilingual seminar it recovered 9 of 13 technical terms against
+    # SenseVoice's 5, and it is 176 MB instead of 940 MB - so the whole
+    # install drops from about 1 GB to about 220 MB. SenseVoice is still in
+    # the catalogue and downloads on demand if someone wants日/韓/粵.
+    @{ Path = 'models\hub\x-asr-zipformer-punct\tokens.txt'
+       Url  = "$XASR/tokens.txt?download=true"
+       Size = 58806 }
+    @{ Path = 'models\hub\x-asr-zipformer-punct\joiner-epoch-99-avg-1.int8.onnx'
+       Url  = "$XASR/joiner-epoch-99-avg-1.int8.onnx?download=true"
+       Size = 2581422 }
+    @{ Path = 'models\hub\x-asr-zipformer-punct\decoder-epoch-99-avg-1.onnx'
+       Url  = "$XASR/decoder-epoch-99-avg-1.onnx?download=true"
+       Size = 11309084 }
+    @{ Path = 'models\hub\x-asr-zipformer-punct\encoder-epoch-99-avg-1.int8.onnx'
+       Url  = "$XASR/encoder-epoch-99-avg-1.int8.onnx?download=true"
+       Size = 161744450 }
 )
 
 function Get-ModelFile($item) {
@@ -245,7 +258,7 @@ $missing = $models | Where-Object {
     -not ((Test-Path $d) -and (Get-Item $d).Length -eq $_.Size)
 }
 if ($missing) {
-    Say '  下載模型（第一次約 1 GB）…' 'Cyan'
+    Say '  下載模型（第一次約 220 MB）…' 'Cyan'
 } else {
     Say '  [v] 模型檔案齊全' 'Green'
 }

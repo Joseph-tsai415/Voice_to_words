@@ -82,7 +82,8 @@ There is no lint/typecheck config and no unit-test framework — each file under
 server on a free port, synthesises two-speaker audio with Windows SAPI, and
 asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
-`test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`)
+`test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`,
+`test_setup_matches_config`)
 need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
@@ -481,6 +482,45 @@ a 2.7 GB model over a flaky link never finishes if every stall restarts from
 zero. A non-empty `.part` is therefore progress worth keeping:
 `hub.cleanup_partials()` removes only empty ones at startup.
 
+## The default recogniser
+
+`DEFAULT_MODEL` is **x-asr-zipformer-punct**, and `setup.ps1` / `setup.sh`
+install it. Those two facts must stay together: a default the installer does
+not fetch means the upload dialog opens on a model that is not there.
+`test_setup_matches_config.py` parses both scripts and fails if they drift
+from the catalogue, from each other, or from `DEFAULT_MODEL`.
+
+It replaced SenseVoice on measurement, not preference. Re-decoding the same 27
+time ranges of a real 69-minute bilingual seminar with every model in the
+catalogue, counting 13 technical terms the context makes certain were spoken:
+
+| model | terms | notes |
+|---|---|---|
+| **x-asr-zipformer-punct** | **9/13** | normal casing, 176 MB, 6.8s |
+| fire-red-asr2 | 9/13 | every English word ALL-CAPS (34/34), 1.2 GB, 49.9s |
+| cohere-transcribe | 7/13 | only one to get "Discovery Phase" |
+| qwen3-asr | 6/13 | produced an empty segment |
+| sense-voice | 5/13 | `f display`, `can`, `out滿` for phage display / candidate / optimize |
+
+That also cut the install from ~1 GB to ~220 MB, since X-ASR is 176 MB against
+SenseVoice's 940 MB. SenseVoice keeps its place in the catalogue for 日/韓/粵
+and now carries a `repo`, so it downloads on demand like everything else -
+previously `repo: None` made it unrecoverable if its files went missing.
+
+Upstream ([Gilgamesh-J/X-ASR](https://github.com/Gilgamesh-J/X-ASR)) ships
+**streaming** chunk models for `OnlineRecognizer`. We deliberately use
+csukuangfj2's **offline** export with `OfflineRecognizer.from_transducer`,
+which is right for batch file transcription: full context and batched
+decoding. Do not "fix" this by switching to the streaming variant.
+
+The repo also carries `bpe.model`, which we do not download. It is only needed
+as `bpe_vocab` alongside `modeling_unit="cjkchar+bpe"` for **hotwords** -
+`from_transducer` accepts `hotwords_file` and `hotwords_score`. That is the
+proper fix for domain jargon and proper nouns, and is a better lever than the
+vocabulary find-and-replace, which can only correct errors the model makes
+*consistently*. Nothing uses it yet; adding it means adding `bpe.model` to
+`extra_files` too.
+
 ## Things that will bite you
 
 - **The punctuation model cannot see marks that are already there.** It is
@@ -503,9 +543,12 @@ zero. A non-empty `.part` is therefore progress worth keeping:
   exactly like an autoplay-policy rejection. Check `audio.error` before
   concluding anything about user activation.
 
-- **Simplified vs Traditional**: SenseVoice, Paraformer and FireRedASR emit Simplified
-  regardless of what was spoken. `textproc.clean()` runs OpenCC (`s2twp` by default).
-  X-ASR Zipformer emits Traditional natively — conversion is a no-op there.
+- **Simplified vs Traditional**: every model in the catalogue emits Simplified
+  regardless of what was spoken, X-ASR included. `textproc.clean()` runs OpenCC
+  (`s2twp` by default) and it is doing real work for all of them. This entry
+  used to claim X-ASR emitted Traditional natively; it does not — decoding a
+  sample with OpenCC switched off returns `我们一个平台两块`. Check a model's
+  raw output before writing down what it emits.
 - **Token-space spacing**: some models put a space between every token. `_CJK_SPACE`
   strips CJK↔CJK gaps only; spaces between Latin words must survive.
 - **Special tokens leak out as literal text.** Both FireRedASR2 variants write
@@ -585,8 +628,9 @@ on it.
 
 ## Models on disk
 
-`models/` holds the four bundled ONNX files (VAD, segmentation, speaker embedding,
-SenseVoice). Downloaded models land in `models/hub/<key>/`. The whole directory is
+`models/` holds the shared ONNX files (VAD, segmentation, speaker embedding);
+recognisers land in `models/hub/<key>/`, except SenseVoice, whose `dir` still
+points at `models/sense-voice` so older installs keep working. The whole directory is
 gitignored — roughly 1 GB bundled, and the catalogue can pull several GB more.
 
 Because nothing under `models/` is in version control, a fresh clone has no models

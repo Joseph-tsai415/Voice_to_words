@@ -227,7 +227,10 @@ def main() -> int:
               isinstance(payload, dict) and "leaderboard" in payload
               and "source" in payload["leaderboard"],
               str((payload.get("leaderboard") or {}).get("source", ""))[:60])
-        check("內建模型可用", any(m["key"] == "sense-voice" and m["downloaded"] for m in models))
+        from app.config import DEFAULT_MODEL
+        check("預設模型已安裝可用",
+              any(m["key"] == DEFAULT_MODEL and m["downloaded"] for m in models),
+              DEFAULT_MODEL)
         check("模型來自 Hugging Face", any(m["repo"] for m in models))
 
         # ---------------------------------------------------------- 上傳
@@ -354,9 +357,14 @@ def main() -> int:
         check("GET /api/downloads", status == 200 and "items" in dl and "active" in dl,
               f"active={dl.get('active') if isinstance(dl, dict) else dl}")
 
-        status, err = request("POST", base + "/api/models/sense-voice/download")
-        check("內建模型不可下載，回 400", status == 400,
-              (err or {}).get("error", "") if isinstance(err, dict) else "")
+        # Every catalogue entry is downloadable now. SenseVoice used to be
+        # bundled with no repo and returned 400 here; setup installs X-ASR
+        # instead, so an unfetchable entry would be dead on a fresh clone.
+        # Re-requesting one that is already complete is a no-op, not an error.
+        status, body = request("POST", base + "/api/models/sense-voice/download")
+        check("已經下載好的模型再按一次是 no-op",
+              status == 200 and isinstance(body, dict) and body.get("state") == "done",
+              f"status={status} state={(body or {}).get('state') if isinstance(body, dict) else body}")
 
         status, err = request("POST", base + "/api/models/no-such-model/download")
         check("未知模型回 404", status == 404)
@@ -368,7 +376,7 @@ def main() -> int:
                      and "busy" in m and "leaderboard" in m for m in models)
         check("模型清單帶有完整度資訊", status == 200 and shaped)
         builtin = next(m for m in models if m["key"] == "sense-voice")
-        check("內建模型檔案數一致",
+        check("模型檔案數一致",
               builtin["files_ready"] == builtin["files_total"] and builtin["downloaded"],
               f"{builtin['files_ready']}/{builtin['files_total']}")
 

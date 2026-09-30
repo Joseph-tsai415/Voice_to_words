@@ -244,7 +244,23 @@ def test_failure_isolation() -> None:
           wait_until(lambda: mgr.status(b) and mgr.status(b)["state"] == "done", timeout=15),
           f"b={(mgr.status(b) or {}).get('state')}")
 
-    check("內建模型不可排入下載", _raises(lambda: mgr.enqueue("sense-voice"), ValueError))
+    # Every catalogue entry must be obtainable. SenseVoice used to carry
+    # `repo: None` because setup bundled it; setup now installs X-ASR instead,
+    # so a bundled-but-unfetchable entry would be permanently dead on a fresh
+    # clone - visible in the model list and impossible to get.
+    from app.config import ASR_MODELS
+    unobtainable = [k for k, v in ASR_MODELS.items() if v.get("repo") is None]
+    check("目錄裡每個模型都抓得到（沒有抓不了的孤兒）",
+          not unobtainable, str(unobtainable))
+
+    # The guard itself still has to work, for anything added without a repo.
+    saved = ASR_MODELS["sense-voice"]["repo"]
+    ASR_MODELS["sense-voice"]["repo"] = None
+    try:
+        check("沒有 repo 的項目仍然不可排入下載",
+              _raises(lambda: mgr.enqueue("sense-voice"), ValueError))
+    finally:
+        ASR_MODELS["sense-voice"]["repo"] = saved
     check("未知模型會報錯", _raises(lambda: mgr.enqueue("nope"), KeyError))
 
 

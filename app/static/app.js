@@ -569,26 +569,40 @@ async function openProject(id) {
     // usually already has something worth reading.
     const partial = !done && isBusy(meta) && (proj.segments || []).length > 0;
 
-    $('#player').hidden = !done;
-    $('#speakers').hidden = !(done || partial);
+    // Once any sentence exists the wav is on disk, so the player works even
+    // mid-run - you can listen along while the rest is still being decoded.
+    const playable = done || partial;
+    $('#player').hidden = !playable;
+    document.body.classList.toggle('has-player', playable);
+    $('#speakers').hidden = !playable;
     $('#btn-export').disabled = !done;
     $('#btn-select-mode').disabled = !done;
     $('#btn-rerun').disabled = isBusy(meta);
     state.reworked = new Set();
+
+    // Select mode is per-project. It used to survive a project switch, which
+    // left the bulk bar sitting there saying "已選 0 句" over a transcript
+    // that did not exist yet.
+    if (state.selectMode) {
+      state.selectMode = false;
+      document.body.classList.remove('select-mode');
+      const b = $('#btn-select-mode');
+      b.classList.remove('on');
+      b.textContent = '選取模式';
+    }
+    state.picked.clear();
 
     // Editing a partial transcript would be thrown away: the tidy passes
     // rewrite every unedited sentence once recognition finishes, and the
     // splitting step changes segment ids. So it is readable, not editable.
     document.body.classList.toggle('partial', partial);
 
-    if (done || partial) {
+    if (playable) {
       renderSpeakers();
       renderTranscript();
-      if (done) {
-        const audio = $('#audio');
-        audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
-        audio.load();
-      }
+      const audio = $('#audio');
+      audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
+      audio.load();
     } else {
       $('#transcript').innerHTML = isBusy(meta)
         ? '<p class="hint">正在辨識，第一批句子出來後就會顯示在這裡。你可以先去處理別的專案。</p>'
@@ -859,14 +873,32 @@ async function refreshPartial(id) {
   state.project = proj;
   if (!(proj.segments || []).length) return;
 
-  const box = $('#transcript');
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  // The page scrolls, not #transcript, so "am I at the bottom" is a window
+  // question. Measure before re-rendering: afterwards the document is taller
+  // and the old scroll position is no longer at the end.
+  const following = window.innerHeight + window.scrollY
+                    >= document.documentElement.scrollHeight - 180;
+
+  document.body.classList.add('partial');
+  document.body.classList.add('has-player');
+  $('#player').hidden = false;
   $('#speakers').hidden = false;
+  const audio = $('#audio');
+  if (!audio.src) {
+    audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
+    audio.load();
+  }
+
   renderSpeakers();
   renderTranscript();
   updateMeta();
-  // Following along at the bottom? Stay there as new sentences land.
-  if (atBottom) box.scrollTop = box.scrollHeight;
+
+  // Reading along at the end? Stay there as new sentences land. Scrolled up
+  // to look at something? Then do not yank the page away.
+  if (following) {
+    window.scrollTo({ top: document.documentElement.scrollHeight,
+                      behavior: 'smooth' });
+  }
 }
 
 /* 完整流程，讓使用者看得到自己在第幾步 */

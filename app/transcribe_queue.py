@@ -39,7 +39,14 @@ STAGE_LABELS = {
 }
 
 # Share of wall-clock each stage takes, for a single overall percentage.
-STAGE_WEIGHTS = {"decode": 0.04, "load": 0.03, "diarize": 0.28, "vad": 0.05, "asr": 0.60}
+# Measured end to end on a real 25-minute recording: diarize 183s, vad 16s,
+# asr 83s - so 65% / 6% / 29% of the proportional work. These were previously
+# 0.28 / 0.05 / 0.60, i.e. diarize and asr transposed, which made the bar
+# crawl through the longest stage and then jump near the end.
+#
+# That is the CPU case, and it is the conservative one: on a GPU only asr gets
+# faster (14x measured), so diarize's share goes up, not down.
+STAGE_WEIGHTS = {"decode": 0.04, "load": 0.03, "diarize": 0.60, "vad": 0.05, "asr": 0.28}
 _ORDER = ["decode", "load", "diarize", "vad", "asr"]
 
 # Stages whose cost scales with the length of the recording. Only these are used

@@ -29,7 +29,17 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* body must be min-height, not height. A sticky element only sticks inside
+   its parent's box, and `height: 100%` pins body to exactly one viewport -
+   so the sticky topbar scrolled away the moment you passed the first screen. */
+html { height: 100%; }
+body { min-height: 100%; }
+
+/* The UA rule for [hidden] is display:none at normal specificity, so any
+   author rule like `.player { display: flex }` silently beats it and the
+   element stays on screen however many times the JS sets .hidden = true.
+   Both the player and the bulk bar were doing exactly that. */
+[hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.6 var(--sans);
@@ -50,7 +60,12 @@ body {
 .topbar-actions { display: flex; gap: 8px; }
 
 /* ---------------------------------------------------------------- layout */
-.layout { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 61px); }
+/* One source of truth for the sidebar width: the fixed player has to start
+   where the content column starts, or it centres on the whole window and
+   sits off to the left of the transcript. */
+:root { --sidebar-w: 260px; --content-w: 940px; }
+
+.layout { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: calc(100vh - 61px); }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } }
 
 .sidebar {
@@ -219,15 +234,38 @@ body {
 /* Belongs to the open project, not the window. It sits after the transcript
    and sticks to the bottom of the viewport, so it stays reachable however long
    the conversation is - and it goes away when you switch to another project. */
+/* Pinned to the viewport, not the document. `position: sticky` only pins
+   inside a scrolling ancestor and does nothing at all when the page is short
+   - which is exactly the case while a job is still running and the transcript
+   is only a few lines long, so the player floated in the middle of an empty
+   page. Fixed keeps it on the bottom edge whatever the page height. */
+/* Anchored to the content column, not the window: left starts past the
+   sidebar and `margin: 0 auto` between left/right centres it on the same
+   axis as the transcript above it. Centring on the viewport instead put it
+   visibly left of the text. */
 .player {
-  position: sticky; bottom: 12px; z-index: 30;
+  position: fixed;
+  left: var(--sidebar-w); right: 0; bottom: 12px; z-index: 30;
+  width: min(var(--content-w), calc(100% - 44px));
+  margin: 0 auto;
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 9px 14px; margin-top: 14px;
+  padding: 9px 14px;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   backdrop-filter: blur(8px);
   border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: 0 4px 20px rgba(16, 24, 40, .12);
 }
+/* The sidebar is gone below 900px, so the player fills the width there. */
+@media (max-width: 900px) { .player { left: 0; } }
+
+/* Room for the fixed player so it never covers the last sentence. */
+body.has-player .workspace { padding-bottom: 92px; }
+
+/* Bulk speaker assignment needs a finished transcript - segment ids change
+   when the tidy pass splits sentences, so a selection made mid-run would
+   point at rows that no longer exist. */
+body.partial #bulkbar { display: none; }
+
 @media (prefers-color-scheme: dark) {
   .player { box-shadow: 0 4px 20px rgba(0, 0, 0, .45); }
 }

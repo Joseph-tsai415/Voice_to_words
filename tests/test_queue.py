@@ -196,6 +196,22 @@ def test_progress_never_goes_backwards() -> None:
     # Waiting for a model download really has done nothing yet.
     check("等模型下載時是 0%", tqm._overall('wait_model', 1.0) == 0.0)
 
+    check("權重加起來剛好是 1",
+          abs(sum(tqm.STAGE_WEIGHTS.values()) - 1.0) < 1e-9,
+          str(round(sum(tqm.STAGE_WEIGHTS.values()), 4)))
+
+    # Measured end to end on a real 25-minute recording: diarize 183s, vad
+    # 16s, asr 83s. The weights had diarize at 0.28 and asr at 0.60 - exactly
+    # transposed - so the bar crawled through the longest stage and then
+    # jumped. On a GPU the gap is wider still, because only asr gets faster.
+    w = tqm.STAGE_WEIGHTS
+    check("分辨講者的權重比辨識文字大（實測它才是大頭）",
+          w['diarize'] > w['asr'], f"diarize={w['diarize']} asr={w['asr']}")
+    check("分辨講者權重接近實測的 0.65",
+          abs(w['diarize'] - 0.60) < 0.08, str(w['diarize']))
+    check("辨識文字權重接近實測的 0.29",
+          abs(w['asr'] - 0.28) < 0.08, str(w['asr']))
+
 
 def main() -> int:
     test_progress_never_goes_backwards()

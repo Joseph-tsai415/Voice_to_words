@@ -165,7 +165,7 @@ footer p{max-width:none}
 
 <section id="install">
   <h2>安裝</h2>
-  <p class="lede">Windows 10／11，其他系統看下面的 bash 版本。第一次安裝約需 10 分鐘，大部分時間在下載模型。</p>
+  <p class="lede">Windows 10／11，其他系統看下面的 bash 版本。第一次安裝約需 3–5 分鐘，大部分時間在下載模型。</p>
 
   <ol class="steps">
     <li>
@@ -176,7 +176,7 @@ cd Voice_to_words</code></pre>
     </li>
     <li>
       <h3>執行</h3>
-      <p>就這一行，沒有第二步。第一次會自己把環境準備好 — 找 Python（沒有就用 winget 裝）、建立虛擬環境、裝套件、偵測到 NVIDIA 顯示卡就順便開 GPU 加速、下載約 1 GB 的模型，然後啟動並打開 <code>http://127.0.0.1:7860</code>。</p>
+      <p>就這一行，沒有第二步。第一次會自己把環境準備好 — 找 Python（沒有就用 winget 裝）、建立虛擬環境、裝套件、偵測到 NVIDIA 顯示卡就順便開 GPU 加速、下載約 220 MB 的模型，然後啟動並打開 <code>http://127.0.0.1:7860</code>。</p>
       <pre><code>.\run.ps1</code></pre>
       <p>之後每次都只是啟動，幾秒鐘。中途斷線沒關係 — 再跑一次會從沒做完的地方接下去，已經抓好的不會重抓。不想開 PowerShell 就直接雙擊 <code>run.cmd</code>。</p>
     </li>
@@ -186,7 +186,7 @@ cd Voice_to_words</code></pre>
   <ul>
     <li>Windows 10／11 與 PowerShell。macOS、Linux、WSL 改用 <code>./run.sh</code>，做的事情完全一樣</li>
     <li>Python 3.9 以上 — 沒有的話會嘗試自動安裝</li>
-    <li>約 2 GB 硬碟空間給內建模型，想試其他模型再多留幾 GB</li>
+    <li>約 1 GB 硬碟空間（預設模型 176 MB），想試其他模型再多留幾 GB</li>
     <li>NVIDIA 顯示卡<strong>可選</strong>。沒有也能跑，只是辨識那一段會慢一點</li>
   </ul>
 
@@ -225,7 +225,8 @@ cd Voice_to_words</code></pre>
   <p><code>m4a</code>、<code>mp3</code>、<code>wav</code>、<code>flac</code>、<code>mp4</code>、<code>mov</code>、<code>wma</code>、<code>opus</code>、<code>webm</code>、<code>aac</code>、<code>amr</code>、<code>ogg</code>、<code>3gp</code> 等。內建 FFmpeg 函式庫，<strong>不需要另外安裝 ffmpeg</strong>。</p>
 
   <h3>辨識模型</h3>
-  <p>內建 SenseVoice，開箱即用。另外還可以在介面裡下載 X-ASR Zipformer、FireRedASR2、Qwen3-ASR、Cohere Transcribe、Paraformer 等，各有擅長，換模型重跑一次就能比較。</p>
+  <p>預設是 <strong>X-ASR Zipformer 中英</strong>，安裝時就一併裝好（176 MB），開箱即用。會選它是實測的結果：拿一場 69 分鐘的中英混說研討會，讓每個模型重跑同一批時間區間，數 13 個確定講過的技術名詞 —— X-ASR 認出 9 個，SenseVoice 只有 5 個，而且英文常糊掉。</p>
+  <p>其餘模型（SenseVoice 多語、FireRedASR2、Qwen3-ASR、Cohere Transcribe、Paraformer）都可以在介面裡下載，換模型重跑一次就能比較。需要日／韓／粵時再抓 SenseVoice。</p>
   <p>模型清單裡的排名、WER 和下載數是<strong>執行時直接向 Hugging Face 取得</strong>的，不是寫死的數字。沒抓到資料時就不顯示，不會用猜的。</p>
 </section>
 

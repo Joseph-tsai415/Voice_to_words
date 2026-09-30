@@ -107,12 +107,16 @@ SENTENCE_MAX_CHARS = 80
 # pulled from. `kind` selects the sherpa-onnx factory in asr.py.
 ASR_MODELS: dict[str, dict] = {
     "sense-voice": {
-        "label": "SenseVoice (內建)",
+        "label": "SenseVoice 多語",
         "kind": "sense_voice",
-        "repo": None,
+        # Was bundled with no repo, which made it undownloadable if the files
+        # ever went missing. It is now a normal catalogue entry; `dir` still
+        # points at models/sense-voice, so an existing install is untouched
+        # and a fresh one downloads to the same place.
+        "repo": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
         "languages": "中 / 英 / 日 / 韓 / 粵",
         "size_mb": 900,
-        "note": "隨專案附帶，免下載。輸出簡體，可用「中文轉換」轉繁體。",
+        "note": "多語（含日韓粵）。輸出簡體，會自動轉繁。中英混說不如 X-ASR。",
         "upstream": "FunAudioLLM/SenseVoiceSmall",
         "arch": "SenseVoice encoder（非自迴歸）",
         "dir": MODELS_DIR / "sense-voice",
@@ -132,7 +136,11 @@ ASR_MODELS: dict[str, dict] = {
         "repo": "csukuangfj2/sherpa-onnx-x-asr-zipformer-transducer-zh-en-punct-int8-2026-06-03",
         "languages": "中 / 英",
         "size_mb": 176,
-        "note": "2026-06 釋出。輸出自帶標點與繁體。",
+        # Verified against the model, not assumed: the raw output is
+        # *Simplified* ("我们一个平台两块"), so OpenCC is doing real work here.
+        # An earlier note claimed it emitted Traditional natively; it does not.
+        # Punctuation and English casing are genuinely built in.
+        "note": "2026-06 釋出，中英混說表現最好。自帶標點，輸出簡體，會自動轉繁。",
         "upstream": None,   # 上游是 GitHub Gilgamesh-J/X-ASR，不在排行榜上
         "arch": "Zipformer transducer",
         "punctuates": True,
@@ -244,7 +252,13 @@ ASR_MODELS: dict[str, dict] = {
     },
 }
 
-DEFAULT_MODEL = "sense-voice"
+# X-ASR, not SenseVoice. Measured on a real 69-minute bilingual seminar by
+# re-decoding the same 27 time ranges with every model in the catalogue:
+# X-ASR recovered 9 of 13 known technical terms, SenseVoice only 5, and
+# SenseVoice mangled the English badly ("f display", "can", "out滿" for
+# "phage display", "candidate", "optimize"). X-ASR is also 5x smaller
+# (176 MB vs 900 MB) and decoded the sample faster (6.8s vs 8.8s).
+DEFAULT_MODEL = "x-asr-zipformer-punct"
 
 
 def recognizer_keys() -> list[str]:
