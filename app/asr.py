@@ -16,6 +16,7 @@ import numpy as np
 import sherpa_onnx
 
 from . import config as C
+from . import sentences
 from .config import ASR_MODELS, SAMPLE_RATE, model_paths, resolve_language
 from .gpu import resolve as resolve_provider
 from .textproc import (DEFAULT_ZH_MODE, clean, is_backchannel,
@@ -690,12 +691,27 @@ def transcribe(samples: np.ndarray, model_key: str, *, num_speakers: int = -1,
         decoded += len(streams)
 
         for (start, end, spk), stream in zip(batch, streams):
-            text = clean(stream.result.text or "", zh_mode)
-            # A line that is only punctuation or a single stray character is a
-            # mis-decoded noise burst. Keeping them polluted the transcript and,
-            # worse, each one could become its own speaker.
-            if text and is_meaningful(text):
-                results.append(Utterance(round(start, 3), round(end, 3), spk, text))
+            raw = stream.result
+
+            # Split here, while the model's own token times are still in hand.
+            # Doing it later means guessing the boundary from character counts,
+            # which measured a median 0.38s out (p90 1.31s). clean() rewrites
+            # the text - OpenCC, spacing, stray tokens - so it has to run
+            # *after* the cut, or the offsets no longer line up with the
+            # tokens they came from.
+            pieces = sentences.split_with_timestamps(
+                start, end, list(raw.tokens or []), list(raw.timestamps or []))
+            if len(pieces) <= 1:
+                pieces = [(start, end, raw.text or "")]
+
+            for p_start, p_end, p_text in pieces:
+                text = clean(p_text, zh_mode)
+                # A line that is only punctuation or a single stray character
+                # is a mis-decoded noise burst. Keeping them polluted the
+                # transcript and, worse, each one could become its own speaker.
+                if text and is_meaningful(text):
+                    results.append(Utterance(round(p_start, 3), round(p_end, 3),
+                                             spk, text))
 
         done = min(offset + batch_len, len(usable))
         report("asr", done / len(usable), f"第 {done} / {len(usable)} 句")

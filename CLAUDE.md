@@ -370,6 +370,23 @@ punctuation needs the final words, and sentence splitting needs the marks.
 
 All three skip sentences carrying `edited`: the user's own wording always wins.
 
+**Where the cut lands in time.** The transducer returns a timestamp per
+token on `stream.result.timestamps`, so `split_with_timestamps()` puts the
+boundary at the time the model says that token was spoken. It runs inside the
+decode loop, while those timings are still in hand, and **before**
+`clean()` - OpenCC, spacing and stray-token removal all rewrite the text, so
+cleaning first would break the character offsets that map a cut back to its
+token. Each piece is cleaned separately afterwards.
+
+`split_span()` - the character-count estimate - remains the fallback for
+models that return no timestamps, and for the post-hoc punctuation pass,
+whose new marks have no timings behind them. It is a real fallback, not an
+equal: measured against this transducer's own timings over 85 sentence cuts,
+the estimate was out by a median of 0.38s, p90 1.31s, with 63% wrong by more
+than 0.3s and 14% by over a second. On real audio the corrections run to
++2.7s. That is the difference between the per-sentence play button starting
+on the sentence and starting mid-way through the one before it.
+
 Splitting **must** run after punctuation. Before the punctuation pass only 12
 of those 118 segments carried an internal terminal mark; there was nothing to
 cut on.
