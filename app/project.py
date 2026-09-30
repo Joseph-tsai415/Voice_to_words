@@ -120,7 +120,57 @@ def list_projects() -> list[dict[str, Any]]:
 
 
 def delete(project_id: str) -> None:
-    shutil.rmtree(project_dir(project_id), ignore_errors=True)
+    """Remove a project folder, and say so if it could not be removed.
+
+    This used to be `rmtree(..., ignore_errors=True)`. On Windows the browser
+    holds `audio.wav` open for playback, so the walk deleted `project.json`,
+    hit the locked wav, swallowed the error and returned as though it had
+    worked. The folder was then left with a 48 MB wav and no metadata - and
+    `list_projects()` skips folders without a `project.json`, so the orphan
+    was invisible in the UI and could never be cleared from it.
+
+    The lock is transient (it goes once the audio element lets go), so retry
+    briefly, then raise rather than lie about it.
+    """
+    folder = project_dir(project_id)
+    last: OSError | None = None
+    for attempt in range(4):
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
+            return
+        try:
+            shutil.rmtree(folder)      # again, this time telling us why
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.25 * (attempt + 1))
+    if folder.exists():
+        raise OSError(
+            f"刪不掉 {folder.name}：{last}。"
+            "檔案可能正被播放器或其他程式開著，關掉之後再試一次。"
+        )
+
+
+def find_orphans() -> list[dict[str, Any]]:
+    """Project folders with no `project.json`.
+
+    `list_projects()` skips these, so without this they are invisible: disk
+    space that the UI cannot see and therefore cannot offer to reclaim. They
+    come from a delete that only half-finished.
+    """
+    out: list[dict[str, Any]] = []
+    if not PROJECTS_DIR.exists():
+        return out
+    for folder in PROJECTS_DIR.iterdir():
+        if not folder.is_dir() or (folder / "project.json").exists():
+            continue
+        files = [f for f in folder.rglob("*") if f.is_file()]
+        out.append({
+            "id": folder.name,
+            "files": [f.name for f in files],
+            "bytes": sum(f.stat().st_size for f in files),
+        })
+    return out
 
 
 # --------------------------------------------------------------------------

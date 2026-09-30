@@ -37,6 +37,16 @@ def create_app() -> Flask:
     if stale:
         log.warning("有 %d 個專案上次沒跑完，已標記為中斷：%s", len(stale), stale)
 
+    # Folders left behind by a delete that could not finish. list_projects()
+    # skips them, so without this line they are disk space nobody can see.
+    orphans = store.find_orphans()
+    if orphans:
+        total = sum(o["bytes"] for o in orphans) / 1e6
+        log.warning(
+            "有 %d 個殘留的資料夾（沒有 project.json，介面看不到），共約 %.0f MB：%s。"
+            "確定不要了就直接刪掉 data/projects/ 底下這幾個資料夾。",
+            len(orphans), total, "、".join(o["id"] for o in orphans))
+
     # A dialog can't be copy-pasted, so every failure is also written to the
     # terminal in full, and the traceback is handed to the browser console.
     @app.errorhandler(Exception)
@@ -360,7 +370,13 @@ def create_app() -> Flask:
     def api_project_delete(pid: str) -> Response:
         tq.cancel(pid)
         tq.forget(pid)
-        store.delete(pid)
+        try:
+            store.delete(pid)
+        except OSError as exc:
+            # Usually the audio is still open in the player. Say so plainly
+            # rather than letting it become a 500 with a traceback.
+            log.warning("刪除專案 %s 失敗：%s", pid, exc)
+            return jsonify(error=str(exc)), 409
         return jsonify(ok=True)
 
     @app.get("/api/projects/<pid>/audio")

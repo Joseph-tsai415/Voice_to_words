@@ -28,6 +28,8 @@ error messages, and comments in templates/JS are all zh-Hant.
 .venv\Scripts\python.exe tests\test_tidy.py        # re-running the text fixes on a saved project
 .venv\Scripts\python.exe tests\test_partial.py     # showing sentences while recognition runs
 .venv\Scripts\python.exe tests\test_upload.py      # what an uploaded filename turns into
+.venv\Scripts\python.exe tests\test_delete.py      # deleting must finish or say it did not
+.venv\Scripts\python.exe tests\test_setup_matches_config.py   # installer vs catalogue
 ```
 
 `run.sh` / `setup.sh` are the bash/WSL equivalents; `run.cmd` just forwards to
@@ -83,7 +85,7 @@ server on a free port, synthesises two-speaker audio with Windows SAPI, and
 asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
 `test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`,
-`test_setup_matches_config`)
+`test_setup_matches_config`, `test_delete`)
 need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
@@ -143,6 +145,18 @@ data/
 ├── leaderboard.json      Open ASR Leaderboard cache (12h)
 └── hf_stats.json         Hub downloads/likes/license cache (12h)
 ```
+
+**`delete()` must not use `ignore_errors=True`.** On Windows the browser holds
+`audio.wav` open for playback, so `rmtree` removed `project.json`, hit the
+locked wav, swallowed the error and returned as though it had worked. That
+left a folder with a 48 MB wav and no metadata - and since `list_projects()`
+skips folders without a `project.json`, the orphan was invisible in the UI and
+could never be cleared from it. Seen for real on a live install. `delete()`
+now retries briefly (the lock is transient) and raises rather than lying;
+`find_orphans()` reports what earlier failures left behind, and `create_app()`
+logs it at startup. It deliberately does **not** auto-delete them: a folder
+with only an audio file is indistinguishable from a corrupted project, and
+throwing away someone's recording on boot is not a decision to make for them.
 
 A project folder is self-contained — copying it to another machine works.
 Deleting one is `DELETE /api/projects/<pid>`, which cancels any running job,
@@ -513,13 +527,23 @@ csukuangfj2's **offline** export with `OfflineRecognizer.from_transducer`,
 which is right for batch file transcription: full context and batched
 decoding. Do not "fix" this by switching to the streaming variant.
 
-The repo also carries `bpe.model`, which we do not download. It is only needed
-as `bpe_vocab` alongside `modeling_unit="cjkchar+bpe"` for **hotwords** -
-`from_transducer` accepts `hotwords_file` and `hotwords_score`. That is the
-proper fix for domain jargon and proper nouns, and is a better lever than the
-vocabulary find-and-replace, which can only correct errors the model makes
-*consistently*. Nothing uses it yet; adding it means adding `bpe.model` to
-`extra_files` too.
+The repo also carries `bpe.model`. **Do not add it — hotwords do not work
+with this model.** It looked like the right fix for domain jargon, since
+`create_stream(hotwords=...)` is per-stream and so costs nothing in the
+recognizer cache. Tested against the real model:
+
+| `modeling_unit` | Latin hotword | Chinese hotword |
+|---|---|---|
+| `bpe` | **segfault** | **segfault** |
+| `cjkchar+bpe` | **segfault** | skipped, "Cannot find ID for token" |
+| `cjkchar` | skipped | skipped |
+
+The cause is in `tokens.txt`: it is a pure 5000-piece BPE vocabulary with no
+bare CJK characters, so `cjkchar` lookups can never resolve, and the BPE
+encode path crashes outright. A segfault takes the whole worker with it and
+loses the entire job, which is far worse than the jargon it would fix. If a
+later sherpa-onnx release fixes the crash, re-test all three units before
+believing it.
 
 ## Things that will bite you
 
