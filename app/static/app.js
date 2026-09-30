@@ -1024,6 +1024,46 @@ function renderProjectStatus(meta) {
   }
 }
 
+/* What this machine is actually going to use. The provider is decided per
+   launch by an on-disk-cache-free probe, so this is a live answer, not a
+   setting - which is why it sits next to a re-detect button rather than a
+   dropdown. The stage split is deliberate and measured: recognition is much
+   faster on the GPU, diarization and VAD are slower there. */
+async function renderCompute() {
+  const grid = $('#compute-grid');
+  const why = $('#compute-why');
+  let cap;
+  try {
+    cap = await api('/api/capacity');
+  } catch (err) {
+    grid.innerHTML = '';
+    why.textContent = '讀不到這台機器的資訊。';
+    return;
+  }
+  const c = cap.compute || {};
+  const onGpu = c.provider === 'cuda';
+  const cell = (label, value, cls) =>
+    `<div class="compute-cell"><span>${label}</span><b class="${cls || ''}">${value}</b></div>`;
+
+  grid.innerHTML = [
+    cell('語音辨識', onGpu ? 'GPU' : 'CPU', onGpu ? 'ok' : ''),
+    cell('分辨講者', (cap.compute.diarize_provider || 'cpu').toUpperCase(),
+         '', ),
+    cell('顯示卡', c.gpu || '（沒有可用的）', c.gpu ? 'ok' : 'dim'),
+    cell('CPU', `${cap.cpu_count} 核`),
+    cell('同時處理', `${cap.max_jobs} 個 × ${cap.default_threads} 執行緒`),
+    cell('目前執行中', `${cap.running} 個`),
+    cell('已載入模型', cap.loaded_models && cap.loaded_models.length
+         ? `${cap.loaded_models.length} 個・${cap.loaded_mb} MB` : '（無）'),
+    cell('sherpa-onnx', c.sherpa_version || '—'),
+  ].join('');
+
+  const bits = [c.reason || ''];
+  if (!onGpu && c.install_hint) bits.push(`想開 GPU：${c.install_hint}`);
+  if (onGpu) bits.push('分辨講者維持 CPU 是實測結果 —— 它每次輸入長度都不同，放 GPU 反而慢。');
+  why.textContent = bits.filter(Boolean).join('　');
+}
+
 /* --------------------------------------------------------------- models */
 async function refreshModelOptions() {
   let models;
@@ -1473,7 +1513,27 @@ function init() {
   $('#btn-models').onclick = async (ev) => {
     $('#model-list').innerHTML = '<p class="loading-line"><span class="spinner"></span>讀取模型清單…</p>';
     $('#dlg-models').showModal();
+    renderCompute();                 // 不 await：模型清單比較重要，別讓它等
     await renderModelList();
+  };
+
+  $('#compute-refresh').onclick = async (e) => {
+    const btn = e.target;
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = '偵測中…';
+    try {
+      // Actually re-probes CUDA in a child process and drops the cached
+      // recognizers, so a card that was switched on since launch is picked up.
+      await api('/api/compute/refresh', { method: 'POST' });
+      await renderCompute();
+      toast('已重新偵測');
+    } catch (err) {
+      showError('重新偵測失敗', err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
   };
   $('#models-close').onclick = () => $('#dlg-models').close();
   $('#err-close').onclick = () => $('#dlg-error').close();

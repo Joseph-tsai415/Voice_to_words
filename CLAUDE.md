@@ -545,6 +545,41 @@ loses the entire job, which is far worse than the jargon it would fix. If a
 later sherpa-onnx release fixes the crash, re-test all three units before
 believing it.
 
+## Accuracy levers that were tried and did not work
+
+The room is the limit, not the post-processing. Measured on a real 69-minute
+seminar recording: speech at -27 dBFS, level spread only 6.3 dB, almost no
+clipping - but energy after a talker stops decays at only **28 dB/s, so
+RT60 is roughly 2.1 seconds**. A typical meeting room is 0.4-0.6s. At 2.1s
+every syllable smears into the next several, which is why English suffers far
+more than Chinese: it leans on fast consonant transitions that the room
+destroys.
+
+Everything tried against that, all measured on the same audio:
+
+| lever | result |
+|---|---|
+| GTCRN speech denoiser | **actively harmful**: 11/13 terms -> 6/13 |
+| WPE dereverb (`nara_wpe`, taps 10/20/30) | **no effect**: 39 real English words -> 37/38/39 |
+| `modified_beam_search` vs greedy | no term gain, +7% time, one Chinese fix in 11 windows |
+| hotwords | segfault, see the X-ASR section |
+| loudness normalisation | pointless - levels are already even |
+
+The denoiser result is the instructive one: GTCRN is trained on *additive*
+noise, and reverberation is not additive noise. Applied to a reverberant room
+it strips the tails unevenly and takes speech with them. Do not reach for a
+denoiser because the "SNR" looks low - on a reverberant recording that floor
+*is* the previous syllable, not noise.
+
+`scipy` and `nara_wpe` are deliberately **not** in `requirements.txt`. They
+were installed to run the WPE test and removed again; it did not earn ~50 MB
+of dependency.
+
+What is left is the recording itself: a closer microphone. Direct-to-
+reverberant ratio improves about 6 dB every time the mic-to-speaker distance
+halves, and no amount of post-processing recovers consonants the room has
+already smeared.
+
 ## Things that will bite you
 
 - **The punctuation model cannot see marks that are already there.** It is

@@ -181,7 +181,19 @@
 <!-- ─────────────────────────── 模型設定 ─────────────────────────── -->
 <dialog id="dlg-models" class="dlg wide">
   <h2>辨識模型</h2>
-  <p class="hint">全部在本機 CPU 執行，不會上傳任何音訊。下載一次後就永久可用。</p>
+  <p class="hint">全部在本機執行，不會上傳任何音訊。下載一次後就永久可用。</p>
+
+  <!-- 這台機器現在拿什麼在算。裝置是每次啟動重新偵測的，所以這裡也可以重測。 -->
+  <div class="compute" id="compute-box">
+    <div class="compute-row">
+      <span class="compute-title">這台機器</span>
+      <button type="button" class="btn ghost sm" id="compute-refresh"
+              title="重新偵測一次。筆電的獨顯剛切回來時按這個">重新偵測</button>
+    </div>
+    <div class="compute-grid" id="compute-grid"></div>
+    <p class="hint" id="compute-why"></p>
+  </div>
+
   <p class="hint" id="lb-source">讀取排名中…</p>
   <div id="model-list" class="model-list"></div>
   <div class="dlg-actions">
