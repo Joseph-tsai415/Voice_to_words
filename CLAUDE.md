@@ -29,6 +29,8 @@ error messages, and comments in templates/JS are all zh-Hant.
 .venv\Scripts\python.exe tests\test_partial.py     # showing sentences while recognition runs
 .venv\Scripts\python.exe tests\test_upload.py      # what an uploaded filename turns into
 .venv\Scripts\python.exe tests\test_delete.py      # deleting must finish or say it did not
+.venv\Scripts\python.exe tests\test_audio_kept.py  # a re-run must not delete its own audio
+.venv\Scripts\python.exe tests\test_speakers.py    # the voiceprint library
 .venv\Scripts\python.exe tests\test_setup_matches_config.py   # installer vs catalogue
 ```
 
@@ -85,7 +87,8 @@ server on a free port, synthesises two-speaker audio with Windows SAPI, and
 asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
 `test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`,
-`test_setup_matches_config`, `test_delete`, `test_audio_kept`)
+`test_setup_matches_config`, `test_delete`, `test_audio_kept`,
+`test_speakers`)
 need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
@@ -142,6 +145,7 @@ data/
 │   ├── audio.wav         16 kHz mono, ~47 MB per 25 minutes
 │   └── source.<ext>      the original upload, deleted once a run succeeds
 ├── vocabulary.json       the global correction list
+├── speakers.json         named voiceprints, 512 floats each (~5 KB a person)
 ├── leaderboard.json      Open ASR Leaderboard cache (12h)
 └── hf_stats.json         Hub downloads/likes/license cache (12h)
 ```
@@ -335,6 +339,48 @@ that matter, each of which fixed an observed misassignment:
   match is confident. Re-running a sentence must not silently reattribute it.
 - With no profiles available at all, the longest cluster inherits the original
   speaker instead of everything becoming new speakers.
+
+## The voiceprint library
+
+Speaker ids are per-project and meaningless across runs: diarization hands
+out cluster numbers in whatever order it finds them, so re-running a meeting
+used to throw away every name that had been typed.
+[app/speakers.py](app/speakers.py) keeps one named 512-float unit vector per
+person in `data/speakers.json`, and the two ends are wired up automatically:
+
+- **Naming a speaker remembers them.** `PATCH .../speakers/<sid>` builds the
+  print from that speaker's own audio and stores it. Re-naming the same
+  person later averages into the stored vector rather than replacing it, so
+  someone recorded across several meetings ends up with a steadier print than
+  any single clip gives. Placeholder labels (`講者 3`, `Speaker 2`) are never
+  stored - that name means a different person in every other project.
+- **A finished run fills the names back in.** `_name_known_voices()` matches
+  each cluster against the library and writes `matched_by_voice` with the
+  similarity, which the UI shows as a badge. Marked, not silent: a wrong
+  match has to be visible to be correctable, and correcting it re-teaches the
+  library through the ordinary rename path.
+
+Measured on the real 69-minute seminar, enrolling from the first half of each
+speaker's segments and identifying from the second half - audio the library
+had never seen: **6 of 6 correct, none wrong, scores 0.84-0.93**, including a
+speaker with only four sentences.
+
+`profile_for()` seeks to just that speaker's clips rather than using
+`voiceprint.build_profiles()`, which wants the whole decoded recording -
+~130 MB for an hour, far too much to load because somebody typed a name.
+Both take the longest segments first, for the same reason: a backchannel
+("嗯") carries almost no speaker identity.
+
+Neither path may ever fail the thing it rides along with. A rename is a
+rename even if the voiceprint cannot be built, and a transcript is a
+transcript even if matching throws; both are wrapped and logged.
+
+**Do not "simplify" the vector.** 512 floats is 5.3 KB and comparison is one
+dot product, so quantising or reducing dimensions costs accuracy to save
+nothing. What decides whether a match is right is how much and which audio
+went in - see the thresholds in [app/voiceprint.py](app/voiceprint.py),
+measured on this pipeline: same speaker ~0.88, different ~0.33, match at
+0.60.
 
 ## Text fixes that don't touch the audio
 

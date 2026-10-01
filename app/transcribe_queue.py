@@ -63,6 +63,40 @@ _FIXED_WEIGHT = STAGE_WEIGHTS["decode"] + STAGE_WEIGHTS["load"]
 _TERMINAL = frozenset({"save", "done"})
 
 
+def _name_known_voices(project_id: str, wav: Path) -> None:
+    """Fill in names for speakers whose voice is already in the library.
+
+    Diarization hands out cluster numbers in whatever order it finds them, so
+    without this every run - including a re-run of the same meeting - starts
+    at 講者 1 again. The match is marked rather than silent: the UI shows the
+    similarity so a wrong one can be spotted and corrected, and correcting it
+    re-teaches the library through the normal rename path.
+    """
+    from . import speakers
+
+    try:
+        library = speakers.load_library()
+        if not library:
+            return
+        project = store.load(project_id)
+        named = 0
+        for spk in project.get("speakers", []):
+            if not speakers.is_placeholder(spk.get("name", "")):
+                continue                      # already called something
+            vector = speakers.profile_for(wav, project.get("segments", []), spk["id"])
+            name, score = speakers.identify(vector)
+            if name:
+                spk["name"] = name
+                spk["matched_by_voice"] = round(score, 3)
+                named += 1
+        if named:
+            store.save(project)
+            log.info("專案 %s 依聲紋認出 %d 位講者", project_id, named)
+    except Exception as exc:
+        # A convenience must never cost someone their transcript.
+        log.warning("聲紋比對失敗（不影響逐字稿）：%s", exc)
+
+
 def disposable_upload(source: Path, wav: Path) -> bool:
     """Whether `source` is the throwaway upload rather than the recording.
 
@@ -371,6 +405,7 @@ class TranscriptionQueue:
             # Same cluster list as the partial writes used, so the speaker
             # numbering does not shift when the final version lands.
             store.populate(project_id, utterances, seen_clusters or None)
+            _name_known_voices(project_id, wav)
             # Not an unconditional unlink: a re-run is handed audio.wav as its
             # source, so this used to delete the project's only recording.
             if disposable_upload(source, wav):

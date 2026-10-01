@@ -126,6 +126,14 @@ body {
 .spk-name:hover { background: var(--line-2); }
 .spk-name:focus { outline: 2px solid var(--accent); outline-offset: 0; background: var(--panel-2); }
 .spk-count { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+/* Marks a name the voiceprint library filled in rather than one you typed,
+   with the similarity, so a wrong match can be spotted instead of trusted. */
+.spk-voice {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 99px; white-space: nowrap;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  font-variant-numeric: tabular-nums;
+}
 .spk-del { border: none; background: transparent; color: var(--ink-3); cursor: pointer;
   font-size: 15px; line-height: 1; padding: 2px 4px; border-radius: 5px; }
 .spk-del:hover { color: var(--danger); background: var(--line-2); }

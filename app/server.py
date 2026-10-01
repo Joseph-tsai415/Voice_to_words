@@ -12,7 +12,8 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from . import (asr, export, gpu, hub, leaderboard, memory,
-               project as store, punctuation, rework, tidy, vocabulary)
+               project as store, punctuation, rework, speakers, tidy,
+               vocabulary)
 from .audio import SUPPORTED_SUFFIXES, probe_duration, upload_name_and_suffix
 from .config import (ASR_MODELS, BUBBLE_GAP_SEC, CPU_COUNT,
                      DEFAULT_MODEL, DEFAULT_THREADS, MAX_CONCURRENT_JOBS,
@@ -388,6 +389,25 @@ def create_app() -> Flask:
                                    conditional=True)
 
     # ----------------------------------------------------------------- edits
+    def _remember_voice(pid: str, sid: str, name: str) -> None:
+        """Learn this voice, so the same person is named automatically later.
+
+        Speaker ids are per-project, so without this every re-run throws the
+        names away. Never allowed to fail the rename it rides along with -
+        the user asked to rename someone, not to manage a voiceprint library.
+        """
+        if speakers.is_placeholder(name):
+            return
+        try:
+            proj = store.load(pid)
+            wav = store.project_dir(pid) / "audio.wav"
+            if not wav.exists():
+                return
+            vector = speakers.profile_for(wav, proj.get("segments", []), sid)
+            speakers.remember(name, vector)
+        except Exception as exc:
+            log.warning("記住講者聲紋失敗（不影響改名）：%s", exc)
+
     def _mutate(fn, *args) -> Response:
         try:
             proj = fn(*args)
@@ -411,7 +431,9 @@ def create_app() -> Flask:
     def api_speaker_patch(pid: str, sid: str) -> Response:
         body = request.get_json(silent=True) or {}
         if "name" in body:
-            return _mutate(store.rename_speaker, pid, sid, body["name"])
+            resp = _mutate(store.rename_speaker, pid, sid, body["name"])
+            _remember_voice(pid, sid, body["name"])
+            return resp
         if "color" in body:
             return _mutate(store.set_speaker_color, pid, sid, body["color"])
         return jsonify(error="沒有可更新的欄位"), 400

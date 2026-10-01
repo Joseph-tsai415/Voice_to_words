@@ -294,6 +294,9 @@ function renderSpeakers() {
     el.innerHTML = `
       <span class="spk-swatch" style="background:${spk.color}" title="換顏色"></span>
       <input class="spk-name" value="" spellcheck="false" title="改名字">
+      ${spk.matched_by_voice
+        ? `<span class="spk-voice" title="這個名字是依聲紋自動填的，相似度 ${spk.matched_by_voice}。不對的話直接改掉，改完會重新記住。">聲紋 ${spk.matched_by_voice}</span>`
+        : ''}
       <span class="spk-count">${counts[spk.id] || 0} 句</span>
       <button class="spk-del" title="刪除講者">×</button>`;
 
