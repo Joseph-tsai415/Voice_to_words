@@ -671,6 +671,14 @@ already smeared.
   buttons, so `$$('.icon-btn', el)` bound the rerun/split/merge/delete handler
   straight over the play handler and the button silently did nothing. The
   selector is scoped to `.sent-tools .icon-btn` for that reason.
+- **One `<audio>` element serves every project.** `refreshPartial()` used to
+  load audio only `if (!audio.src)` - but after the first project there is
+  always a src, so a recording uploaded while another was open played the
+  *other* meeting's audio for its whole run. `setAudio()` records the owner in
+  `data-project` and is the only thing that touches the source; a project
+  with nothing to play clears it. `openProject()` also drops a response that
+  a later click has overtaken (`state.opening`), or opening a long project
+  then a short one landed back on the long one, audio and all.
 - **The browser cannot play a project that has no `audio.wav`.** Obvious in
   hindsight, but a test fixture built by copying only `project.json` reports
   `NotSupportedError: The element has no supported sources`, which looks

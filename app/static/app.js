@@ -7,6 +7,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const state = {
   projectId: null,
   project: null,
+  opening: null,        // 正在載入、還沒顯示出來的專案
   selectMode: false,
   picked: new Set(),
   focusSeg: null,
@@ -550,12 +551,17 @@ function updateBulkBar() {
 
 /* ------------------------------------------------------------ open/close */
 async function openProject(id) {
+  // The last click wins. Responses can land out of order - a 672-sentence
+  // project loads slower than a short one - and the late one used to take the
+  // page back to the project just left, transcript and audio both.
+  const ticket = state.opening = { id };
   if (state.projectId !== id) {
     $('#workspace').classList.add('switching');
     $('#transcript').innerHTML = '<p class="loading-line"><span class="spinner"></span>載入中…</p>';
   }
   try {
     const proj = await api(`/api/projects/${id}`);
+    if (state.opening !== ticket) return;        // 載入期間又點了別的專案
     state.projectId = id;
     state.project = proj;
     state.picked.clear();
@@ -603,10 +609,11 @@ async function openProject(id) {
     if (playable) {
       renderSpeakers();
       renderTranscript();
-      const audio = $('#audio');
-      audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
-      audio.load();
+      setAudio(id);
     } else {
+      // Nothing to play yet, so the last project's recording must not keep
+      // playing - or still be loaded when the first sentences arrive.
+      setAudio(null);
       $('#transcript').innerHTML = isBusy(meta)
         ? '<p class="hint">正在辨識，第一批句子出來後就會顯示在這裡。你可以先去處理別的專案。</p>'
         : '<p class="hint">這個專案還沒有逐字稿。</p>';
@@ -619,10 +626,14 @@ async function openProject(id) {
     if (isBusy(meta)) startProjectPolling();
     window.scrollTo(0, 0);
   } catch (err) {
+    if (state.opening !== ticket) return;
     $('#transcript').innerHTML = '<p class="hint">載入失敗，詳見錯誤視窗。</p>';
     showError('開啟專案失敗', err);
   } finally {
-    $('#workspace').classList.remove('switching');
+    if (state.opening === ticket) {
+      state.opening = null;
+      $('#workspace').classList.remove('switching');
+    }
   }
 }
 
@@ -654,6 +665,25 @@ function updateTidyBadge() {
 
 /* ---------------------------------------------------------------- player */
 let stopAt = null;
+
+/* One <audio> serves every project, so "does it have a source" is the wrong
+   question - after the first project it always does. refreshPartial() asked
+   exactly that, and a recording uploaded while another was open played the
+   other one's audio for its whole run. So the element records whose it is,
+   and switching also drops the previous sentence's stop point. */
+function setAudio(id) {
+  const audio = $('#audio');
+  audio.pause();
+  stopAt = null;
+  if (id) {
+    audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
+    audio.dataset.project = id;
+  } else {
+    audio.removeAttribute('src');
+    delete audio.dataset.project;
+  }
+  audio.load();
+}
 
 function playFrom(start, end) {
   const audio = $('#audio');
@@ -836,7 +866,9 @@ function startProjectPolling() {
   if (state.projTimer) return;
   state.projTimer = setInterval(async () => {
     const active = await loadProjects();
-    if (state.projectId) {
+    // Mid-switch, state.projectId is still the project being left; reopening
+    // it now would override the click that is on its way to another one.
+    if (state.projectId && !state.opening) {
       const meta = (state.projects || []).find((p) => p.id === state.projectId);
       if (meta) renderProjectStatus(meta);
       if (meta && meta.status === 'ready' && state.project
@@ -886,11 +918,7 @@ async function refreshPartial(id) {
   document.body.classList.add('has-player');
   $('#player').hidden = false;
   $('#speakers').hidden = false;
-  const audio = $('#audio');
-  if (!audio.src) {
-    audio.src = `/api/projects/${id}/audio?t=${Date.now()}`;
-    audio.load();
-  }
+  if ($('#audio').dataset.project !== id) setAudio(id);
 
   renderSpeakers();
   renderTranscript();
