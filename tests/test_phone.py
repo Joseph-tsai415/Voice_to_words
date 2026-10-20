@@ -22,12 +22,13 @@ from __future__ import annotations
 import io
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app import audio, incoming, lanaddr   # noqa: E402
+from app import audio, incoming, lanaddr, phone   # noqa: E402
 
 failures: list[str] = []
 
@@ -112,8 +113,68 @@ def test_incoming(tmp: str) -> None:
     check("啟動時清掉沒傳完的", incoming.cleanup_partials() == 1 and not stray.exists())
 
 
+IPHONE_SAFARI = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+                 "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+IPHONE_LINE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+               "(KHTML, like Gecko) Mobile/15E148 Safari Line/14.1.0")
+
+
+def test_sessions() -> None:
+    section("一個 QR 碼只給一台手機")
+    t = [1000.0]
+    phone.clock = lambda: t[0]
+    s = phone.sessions
+    tok = s.start()
+    verdict, cookie = s.claim(tok, None, IPHONE_SAFARI)
+    check("第一台手機拿到", verdict == "ok" and bool(cookie))
+    check("同一台再開也可以",
+          s.claim(tok, cookie, "")[0] == "ok" and s.authorize(tok, cookie))
+    check("別台手機被拒",
+          s.claim(tok, None, "")[0] == "other" and not s.authorize(tok, "forged"))
+    check("看得出是什麼裝置", s.status()["device"] == "iPhone · Safari", s.status()["device"])
+    check("LINE 內建瀏覽器認得出來",
+          phone.device_label(IPHONE_LINE) == "iPhone · LINE", phone.device_label(IPHONE_LINE))
+    tok2 = s.start()
+    check("換一個 QR 碼後舊的失效",
+          s.claim(tok, cookie, "")[0] == "gone" and s.claim(tok2, None, "")[0] == "ok")
+
+    section("手機傳完之前不能開始")
+    s.announce(3)
+    check("宣告 3 個就等 3 個",
+          s.status()["outstanding"] == 3 and not s.status()["ready"])
+    s.begin_upload("a.m4a", 10)
+    s.end_upload(True)
+    s.begin_upload("b.m4a", 10)
+    s.end_upload(False)
+    st = s.status()
+    check("成功、失敗都算傳完",
+          st["batch_done"] == 2 and st["outstanding"] == 1 and not st["ready"], str(st))
+    t[0] += phone.STALL_SEC + 1
+    check("卡住太久就放行", s.status()["stalled"] and s.status()["ready"])
+
+    section("電腦那邊關掉就結束")
+    tok3 = s.start()
+    c3 = s.claim(tok3, None, "")[1]
+    s.begin_upload("c.m4a", 10)
+    s.end()
+    check("關掉後不能再傳新的", not s.authorize(tok3, c3))
+    s.end_upload(True)
+    check("傳到一半的照樣收完，計數不會亂", s.in_flight() == 0)
+    tok4 = s.start()
+    t[0] += phone.SESSION_IDLE_SEC + 1
+    check("電腦沒在看就過期",
+          s.claim(tok4, None, "")[0] == "gone" and not s.status()["active"])
+    s.start()
+    t[0] += phone.SESSION_IDLE_SEC - 1
+    s.heartbeat()
+    t[0] += phone.SESSION_IDLE_SEC - 1
+    check("有在輪詢就不過期", s.status()["active"])
+    phone.clock = time.monotonic          # later sections use the real clock
+
+
 def main() -> int:
     test_pick_address()
+    test_sessions()
     with tempfile.TemporaryDirectory() as tmp:
         # Never touch the real data/ folder while testing.
         incoming.INCOMING_DIR = Path(tmp) / "incoming"
