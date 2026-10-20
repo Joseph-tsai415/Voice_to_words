@@ -24,6 +24,20 @@ SUPPORTED_SUFFIXES = sorted(NATIVE_SUFFIXES | {
 })
 
 
+def unsupported_reason(suffix: str) -> str | None:
+    """Why a file with this suffix cannot be taken, or None when it can.
+
+    One wording for both ways in - the laptop's file picker and the phone -
+    so the same file is refused with the same sentence wherever it comes from.
+    """
+    if not suffix:
+        return ("檔名沒有副檔名，看不出是什麼格式。"
+                f"支援：{', '.join(SUPPORTED_SUFFIXES)}")
+    if suffix not in SUPPORTED_SUFFIXES:
+        return f"不支援的格式 {suffix}。支援：{', '.join(SUPPORTED_SUFFIXES)}"
+    return None
+
+
 def upload_name_and_suffix(filename: str) -> tuple[str, str]:
     """Split an uploaded filename into (display name, lower-case suffix).
 

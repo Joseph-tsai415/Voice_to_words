@@ -14,7 +14,8 @@ from werkzeug.utils import secure_filename
 from . import (asr, export, gpu, hub, leaderboard, memory,
                project as store, punctuation, rework, speakers, tidy,
                vocabulary)
-from .audio import SUPPORTED_SUFFIXES, probe_duration, upload_name_and_suffix
+from .audio import (SUPPORTED_SUFFIXES, probe_duration, unsupported_reason,
+                    upload_name_and_suffix)
 from .config import (ASR_MODELS, BUBBLE_GAP_SEC, CPU_COUNT,
                      DEFAULT_MODEL, DEFAULT_THREADS, MAX_CONCURRENT_JOBS,
                      PROJECTS_DIR, THREAD_CHOICES, is_downloaded,
@@ -213,11 +214,9 @@ def create_app() -> Flask:
         # Nothing here reaches the filesystem except the suffix, which is
         # whitelisted below.
         display_name, suffix = upload_name_and_suffix(upload.filename)
-        if not suffix:
-            return jsonify(error="檔名沒有副檔名，看不出是什麼格式。"
-                                 f"支援：{', '.join(SUPPORTED_SUFFIXES)}"), 400
-        if suffix not in SUPPORTED_SUFFIXES:
-            return jsonify(error=f"不支援的格式 {suffix}。支援：{', '.join(SUPPORTED_SUFFIXES)}"), 400
+        reason = unsupported_reason(suffix)
+        if reason:
+            return jsonify(error=reason), 400
 
         model = request.form.get("model") or DEFAULT_MODEL
         if model not in ASR_MODELS:
