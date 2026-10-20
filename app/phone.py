@@ -119,6 +119,12 @@ class Sessions:
                 return "ok", None
             return "other", None
 
+    def knows(self, token: str) -> bool:
+        """Is this the live session's token? Lets a refusal say *which* refusal."""
+        with self._lock:
+            s = self._live()
+            return s is not None and _same(s.token, token or "")
+
     def authorize(self, token: str, cookie: str | None) -> bool:
         with self._lock:
             s = self._live()
@@ -191,5 +197,166 @@ class Sessions:
 
 sessions = Sessions()
 
-__all__ = ["COOKIE", "SESSION_IDLE_SEC", "STALL_SEC", "Sessions", "device_label",
-           "sessions"]
+
+# ------------------------------------------------------------------ listener
+# The main app stays on 127.0.0.1. The phone reaches a second, separate
+# server whose Flask app has exactly the three routes below, so there is no
+# route guard to get wrong: transcripts, audio, edit and delete do not exist
+# on this port at all. It is started when the 用手機傳 tab opens and stopped
+# as soon as there is no session and nothing in flight, so nothing listens
+# on the network while the feature is not in use.
+
+REAP_SEC = 5.0
+
+GONE = "此 QR 碼已失效，請在電腦上重新產生。"
+OTHER = "此 QR 碼已在另一台裝置使用。請在電腦上重新產生。"
+INCOMPLETE = "沒有傳完，請重試。"
+
+_srv_lock = threading.Lock()
+_server = None                   # werkzeug BaseWSGIServer while listening
+
+
+def create_phone_app():
+    from flask import Flask, jsonify, make_response, render_template, request
+    from urllib.parse import unquote
+    from werkzeug.exceptions import ClientDisconnected
+
+    from . import incoming
+    from .audio import SUPPORTED_SUFFIXES, unsupported_reason
+
+    app = Flask(__name__, static_folder=None, template_folder="templates")
+    app.config["MAX_CONTENT_LENGTH"] = None        # a phone video can pass 2 GB
+    app.json.ensure_ascii = False
+
+    def deny(token: str):
+        return (jsonify(error=OTHER), 403) if sessions.knows(token) \
+            else (jsonify(error=GONE), 404)
+
+    @app.errorhandler(Exception)
+    def on_error(exc: Exception):
+        from werkzeug.exceptions import HTTPException
+        if isinstance(exc, HTTPException):
+            return exc
+        log.exception("手機上傳出錯 %s %s", request.method, request.path)
+        return jsonify(error=f"{type(exc).__name__}: {exc}"), 500
+
+    @app.get("/u/<token>")
+    def page(token: str):
+        verdict, fresh = sessions.claim(token, request.cookies.get(COOKIE),
+                                        request.headers.get("User-Agent", ""))
+        if verdict == "gone":
+            return render_template("phone.html", message=GONE), 404
+        if verdict == "other":
+            return render_template("phone.html", message=OTHER), 403
+        resp = make_response(render_template(
+            "phone.html",
+            token=token,
+            accept=",".join(SUPPORTED_SUFFIXES),
+            suffixes=SUPPORTED_SUFFIXES,
+            # One wording for both ends: the page fills the suffix into this.
+            no_suffix=unsupported_reason(""),
+            bad_suffix=unsupported_reason(".__SUFFIX__"),
+        ))
+        resp.headers["Cache-Control"] = "no-store"
+        if fresh:
+            # Lax, not Strict: re-scanning the code is a navigation from the
+            # camera app, and Strict would withhold the cookie and refuse the
+            # very phone that owns the session.
+            resp.set_cookie(COOKIE, fresh, path=f"/u/{token}",
+                            httponly=True, samesite="Lax")
+        return resp
+
+    @app.post("/u/<token>/batch")
+    def batch(token: str):
+        if not sessions.authorize(token, request.cookies.get(COOKIE)):
+            return deny(token)
+        try:
+            count = int((request.get_json(silent=True) or {}).get("count", 0))
+        except (TypeError, ValueError):
+            count = 0
+        sessions.announce(count)
+        return jsonify(ok=True)
+
+    @app.put("/u/<token>/file")
+    def upload(token: str):
+        if not sessions.authorize(token, request.cookies.get(COOKIE)):
+            return deny(token)
+        # Headers are latin-1, so the page percent-encodes the name.
+        name = unquote(request.headers.get("X-Filename", ""))
+        sessions.begin_upload(name, request.content_length)
+        ok = False
+        try:
+            item = incoming.receive(request.stream, name, request.content_length,
+                                    sessions.progress)
+            ok = True
+            return jsonify(ok=True, item=item)
+        except incoming.UnsupportedFile as exc:
+            return jsonify(error=str(exc)), 400
+        except (incoming.IncompleteUpload, ClientDisconnected) as exc:
+            log.warning("「%s」沒有傳完：%s", name, exc)
+            return jsonify(error=INCOMPLETE), 400
+        finally:
+            sessions.end_upload(ok)
+
+    return app
+
+
+def ensure_listener(host: str = "0.0.0.0") -> int:
+    """Start the phone listener if it is not running; return its port."""
+    from werkzeug.serving import make_server
+
+    global _server
+    with _srv_lock:
+        if _server is None:
+            srv = make_server(host, 0, create_phone_app(), threaded=True)
+            threading.Thread(target=srv.serve_forever, name="phone-listener",
+                             daemon=True).start()
+            threading.Thread(target=_reap, args=(srv,), name="phone-reaper",
+                             daemon=True).start()
+            _server = srv
+            log.info("手機上傳埠已開啟 %s:%d", host, srv.server_port)
+        return _server.server_port
+
+
+def _reap(srv) -> None:
+    """Close the port once the dialog is gone, even if it never said goodbye."""
+    while True:
+        time.sleep(REAP_SEC)
+        with _srv_lock:
+            if _server is not srv:
+                return
+        sessions.status()                    # expires an abandoned session
+        stop_listener_if_idle()
+
+
+def stop_listener_if_idle() -> bool:
+    """Stop listening when there is no session and no upload in flight."""
+    global _server
+    with _srv_lock:
+        srv = _server
+        if srv is None or sessions.status()["active"] or sessions.in_flight():
+            return False
+        _server = None
+    srv.shutdown()
+    srv.server_close()
+    log.info("手機上傳埠已關閉")
+    return True
+
+
+def listener_port() -> int | None:
+    with _srv_lock:
+        return _server.server_port if _server is not None else None
+
+
+def phone_url(host: str, port: int, token: str) -> str:
+    return f"http://{host}:{port}/u/{token}"
+
+
+def qr_svg(url: str) -> str:
+    import segno
+    return segno.make_qr(url, error="m").svg_inline(scale=6, border=2)
+
+
+__all__ = ["COOKIE", "REAP_SEC", "SESSION_IDLE_SEC", "STALL_SEC", "Sessions",
+           "create_phone_app", "device_label", "ensure_listener", "listener_port",
+           "phone_url", "qr_svg", "sessions", "stop_listener_if_idle"]

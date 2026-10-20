@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>傳送錄音到電腦</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+<style>
+  /* 顏色沿用 app.css 的設定；這一頁獨立，不載入其他檔案。 */
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --ink-2: #4a5160; --ink-3: #6f7789;
+    --line: #e3e6ec; --accent: #2563eb; --accent-ink: #ffffff;
+    --danger: #dc2626; --ok: #059669;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC",
+            "Microsoft JhengHei", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --ink: #e8eaef; --ink-2: #a2a9b8; --ink-3: #6f7789;
+      --line: #262b36; --accent: #4d84f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+         -webkit-text-size-adjust: 100%; }
+  main { max-width: 520px; margin: 0 auto; padding: 28px 16px 40px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: var(--ink-2); font-size: 14px; line-height: 1.6; margin: 0 0 22px; }
+  .pick { position: relative; display: block; text-align: center; background: var(--accent);
+          color: var(--accent-ink); border-radius: 14px; padding: 18px; font-size: 18px;
+          font-weight: 600; cursor: pointer; user-select: none; }
+  .pick:active { filter: brightness(.92); }
+  .pick input { position: absolute; inset: 0; opacity: 0; width: 1px; height: 1px; }
+  .note { color: var(--ink-3); font-size: 13px; margin: 12px 2px 0; }
+  .files { list-style: none; margin: 22px 0 0; padding: 0; display: grid; gap: 10px; }
+  .file { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 12px 14px; }
+  .name { font-size: 14px; word-break: break-all; }
+  .track { height: 6px; border-radius: 99px; background: var(--line); margin: 9px 0 7px;
+           overflow: hidden; }
+  .fill { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .state { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+           font-size: 13px; color: var(--ink-2); }
+  .file.ok .state { color: var(--ok); }
+  .file.ok .fill { background: var(--ok); }
+  .file.err .state { color: var(--danger); }
+  .retry { border: 1px solid var(--line); background: transparent; color: var(--ink);
+           border-radius: 8px; padding: 5px 12px; font-size: 13px; flex: none; }
+  .done { margin: 20px 2px 0; color: var(--ok); font-size: 15px; font-weight: 600; }
+  .message { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+             padding: 22px 18px; font-size: 16px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<main>
+{% if message %}
+  <h1>傳送錄音到電腦</h1>
+  <p class="message">{{ message }}</p>
+{% else %}
+  <h1>傳送錄音到電腦</h1>
+  <p class="sub">選好檔案後會直接傳到電腦上的「新增會議」。</p>
+  <label class="pick">選擇檔案
+    <input type="file" id="pick" multiple accept="{{ accept }}">
+  </label>
+  <p class="note">請保持此頁開啟，傳完前不要鎖定螢幕。</p>
+  <ul class="files" id="files"></ul>
+  <p class="done" id="done" hidden>✓ 已傳到電腦，請在電腦上完成設定。</p>
+{% endif %}
+</main>
+
+{% if not message %}
+<script>
+const TOKEN = {{ token|tojson }};
+const SUFFIXES = {{ suffixes|tojson }};
+const NO_SUFFIX = {{ no_suffix|tojson }};
+const BAD_SUFFIX = {{ bad_suffix|tojson }};     // 「.__SUFFIX__」換成實際副檔名
+const UNREACHABLE = '連不上電腦。請確認手機和電腦連在同一個 Wi-Fi，而且電腦上的對話框還開著。';
+
+const list = document.getElementById('files');
+const done = document.getElementById('done');
+const rows = [];
+
+/* 跟電腦端同一句話：格式不支援就在手機上先擋下來，不必傳完才知道。 */
+function reasonFor(name) {
+  const m = /\.([^./\\]+)$/.exec(name);
+  const suffix = m ? '.' + m[1].toLowerCase() : '';
+  if (!suffix) return NO_SUFFIX;
+  if (!SUFFIXES.includes(suffix)) return BAD_SUFFIX.replace('.__SUFFIX__', suffix);
+  return null;
+}
+
+/* 每個檔案一列，建一次就好，之後只改數值。 */
+function addRow(file) {
+  const li = document.createElement('li');
+  li.className = 'file';
+  li.innerHTML = '<div class="name"></div><div class="track"><div class="fill"></div></div>'
+               + '<div class="state"><span class="msg">等待中</span></div>';
+  li.querySelector('.name').textContent = file.name;
+  list.appendChild(li);
+  const row = { file, li, fill: li.querySelector('.fill'), msg: li.querySelector('.msg'),
+                state: 'waiting', retry: null };
+  rows.push(row);
+  return row;
+}
+
+function setState(row, state, text, pct) {
+  row.state = state;
+  row.li.classList.toggle('ok', state === 'ok');
+  row.li.classList.toggle('err', state === 'err' || state === 'refused');
+  row.msg.textContent = text;
+  if (pct != null) row.fill.style.width = pct + '%';
+  if (row.retry && state !== 'err') { row.retry.remove(); row.retry = null; }
+  if (state === 'err' && !row.retry) {
+    row.retry = document.createElement('button');
+    row.retry.className = 'retry';
+    row.retry.textContent = '重試';
+    row.retry.onclick = async () => {
+      setState(row, 'waiting', '等待中', 0);
+      try { await announce(1); } catch (e) { setState(row, 'err', '✗ ' + e.message); return; }
+      await send(row);
+      updateDone();
+    };
+    row.msg.parentNode.appendChild(row.retry);
+  }
+}
+
+function updateDone() {
+  const sent = rows.filter((r) => r.state === 'ok').length;
+  const busy = rows.some((r) => r.state === 'waiting' || r.state === 'sending' || r.state === 'err');
+  done.hidden = !(sent > 0 && !busy);
+}
+
+/* 先告訴電腦總共要傳幾個，電腦才知道還要等。 */
+async function announce(count) {
+  let res;
+  try {
+    res = await fetch(`/u/${TOKEN}/batch`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count }),
+    });
+  } catch (_) {
+    throw new Error(UNREACHABLE);
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+}
+
+/* fetch 沒有上傳進度，所以用 XMLHttpRequest。一定會 resolve，不會卡住。 */
+function send(row) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', `/u/${TOKEN}/file`);
+    xhr.setRequestHeader('X-Filename', encodeURIComponent(row.file.name));
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.floor((e.loaded / e.total) * 100);
+      setState(row, 'sending', `傳送中 ${pct}%`, pct);
+    };
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        setState(row, 'ok', '✓ 已傳到電腦', 100);
+      } else {
+        let error = `HTTP ${xhr.status}`;
+        try { error = JSON.parse(xhr.responseText).error || error; } catch (_) { /* 不是 JSON */ }
+        setState(row, 'err', '✗ ' + error);
+      }
+      resolve();
+    };
+    xhr.onerror = () => { setState(row, 'err', '✗ ' + UNREACHABLE); resolve(); };
+    xhr.onabort = () => { setState(row, 'err', '✗ ' + UNREACHABLE); resolve(); };
+    setState(row, 'sending', '傳送中 0%', 0);
+    xhr.send(row.file);
+  });
+}
+
+document.getElementById('pick').addEventListener('change', async (ev) => {
+  const files = [...ev.target.files];
+  ev.target.value = '';                 // 同一個檔案再選一次也會觸發
+  if (!files.length) return;
+  done.hidden = true;
+
+  const ready = [];
+  for (const file of files) {
+    const row = addRow(file);
+    const why = reasonFor(file.name);
+    if (why) setState(row, 'refused', '✗ ' + why);
+    else ready.push(row);
+  }
+  if (!ready.length) return;
+
+  try {
+    await announce(ready.length);
+  } catch (e) {
+    ready.forEach((row) => setState(row, 'err', '✗ ' + e.message));
+    return;
+  }
+  for (const row of ready) await send(row);   // 一個接一個傳
+  updateDone();
+});
+</script>
+{% endif %}
+</body>
+</html>

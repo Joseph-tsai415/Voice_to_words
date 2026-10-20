@@ -20,10 +20,14 @@ Run:  .venv/Scripts/python.exe tests/test_phone.py
 from __future__ import annotations
 
 import io
+import socket
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -172,6 +176,82 @@ def test_sessions() -> None:
     phone.clock = time.monotonic          # later sections use the real clock
 
 
+def _http_status(url: str) -> int:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
+def _refused(port: int) -> bool:
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+        except OSError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_phone_app() -> None:
+    section("手機頁面")
+    app = phone.create_phone_app()
+    rules = {r.rule for r in app.url_map.iter_rules()}
+    check("手機那邊只有這三條路，看不到會議資料",
+          rules == {"/u/<token>", "/u/<token>/batch", "/u/<token>/file"}, str(rules))
+    tok = phone.sessions.start()
+    a, b = app.test_client(), app.test_client()
+    r = a.get(f"/u/{tok}", headers={"User-Agent": IPHONE_SAFARI})
+    check("第一台打得開",
+          r.status_code == 200 and "傳送錄音到電腦" in r.get_data(as_text=True), str(r.status_code))
+    r = b.get(f"/u/{tok}")
+    check("另一台被拒",
+          r.status_code == 403 and "此 QR 碼已在另一台裝置使用" in r.get_data(as_text=True))
+    r = a.get("/u/nope")
+    check("亂猜的 token 是 404",
+          r.status_code == 404 and "此 QR 碼已失效" in r.get_data(as_text=True))
+    check("別台不能宣告", b.post(f"/u/{tok}/batch", json={"count": 1}).status_code == 403)
+    a.post(f"/u/{tok}/batch", json={"count": 2})
+    r = a.put(f"/u/{tok}/file", data=b"m" * 5000,
+              headers={"X-Filename": quote("孟青宴安討論.m4a")})
+    check("中文檔名經過 header 還是對的",
+          r.status_code == 200 and r.get_json()["item"]["filename"] == "孟青宴安討論.m4a",
+          f"{r.status_code} {r.get_data(as_text=True)[:80]}")
+    # The test client recomputes Content-Length from the stream, so a header
+    # cannot fake a short body; overriding the environ can, and Werkzeug then
+    # raises ClientDisconnected exactly as it does when a phone locks mid-way.
+    r = a.put(f"/u/{tok}/file", input_stream=io.BytesIO(b"x" * 10),
+              headers={"X-Filename": quote("短.m4a")},
+              environ_overrides={"CONTENT_LENGTH": "100"})
+    check("沒傳完回 400", r.status_code == 400, str(r.status_code))
+    check("沒傳完也算結束，按鈕會回來", phone.sessions.status()["outstanding"] == 0,
+          str(phone.sessions.status()))
+    r = a.put(f"/u/{tok}/file", data=b"x", headers={"X-Filename": "a.txt"})
+    check("不支援的格式回 400",
+          r.status_code == 400 and "不支援的格式" in r.get_json()["error"])
+    check("別台不能傳",
+          b.put(f"/u/{tok}/file", data=b"x",
+                headers={"X-Filename": "a.m4a"}).status_code == 403)
+    check("QR 是 SVG",
+          phone.qr_svg("http://192.168.0.2:5000/u/x").lstrip().startswith("<svg"))
+    check("網址長這樣",
+          phone.phone_url("192.168.0.2", 5000, "abc") == "http://192.168.0.2:5000/u/abc")
+
+
+def test_listener() -> None:
+    section("沒在用就不開網路埠")
+    port = phone.ensure_listener("127.0.0.1")
+    check("開得起來", _http_status(f"http://127.0.0.1:{port}/u/nope") == 404)
+    check("再叫一次是同一個", phone.ensure_listener("127.0.0.1") == port)
+    check("還有工作階段時不關",
+          bool(phone.sessions.start()) and not phone.stop_listener_if_idle())
+    phone.sessions.end()
+    check("結束就關", phone.stop_listener_if_idle() and phone.listener_port() is None)
+    check("關了就連不上", _refused(port))
+
+
 def main() -> int:
     test_pick_address()
     test_sessions()
@@ -179,6 +259,8 @@ def main() -> int:
         # Never touch the real data/ folder while testing.
         incoming.INCOMING_DIR = Path(tmp) / "incoming"
         test_incoming(tmp)
+        test_phone_app()
+        test_listener()
 
     print()
     if failures:
