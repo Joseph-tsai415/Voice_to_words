@@ -16,6 +16,8 @@ const state = {
   dlTimer: null,
   splitSeg: null,
   reworked: new Set(),
+  // 用手機傳：on = QR 碼開著；ready = 手機宣告的檔案都到了；items = 手機傳來、還沒用掉的檔案
+  phone: { on: false, timer: null, polling: false, ready: true, items: [] },
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -753,6 +755,7 @@ function initNewDialog() {
     await withBusy(btn, '載入中…', async () => {
       await refreshModelOptions();   // await: a late refresh would reset the picker
       updateLanguageField();
+      await loadIncoming();          // 上次手機傳來、還沒用掉的檔案
     });
     dlg.showModal();
   };
@@ -762,10 +765,22 @@ function initNewDialog() {
   $('#f-model').onchange = () => { updateLanguageField(); updateNewHint(); };
   $('#f-threads').onchange = () => updateThreadNote();
 
-  /* 多檔案：一次選好幾個錄音，全部排進佇列。 */
+  $('#src-local').onclick = () => { setSourceTab('local'); stopPhone(); };
+  $('#src-phone').onclick = () => { setSourceTab('phone'); startPhone(); };
+  $('#phone-renew').onclick = () => startPhone();
+  /* 取消、Esc、開始辨識都會關掉對話框；QR 碼一起收掉，手機那邊就不能再傳。 */
+  dlg.addEventListener('close', () => { stopPhone(); setSourceTab('local'); });
+
+  /* 多檔案：一次選好幾個錄音（電腦選的＋手機傳的），全部排進佇列。 */
   $('#new-start').onclick = async () => {
-    const files = [...$('#f-audio').files];
-    if (!files.length) return toast('請先選擇音檔', true);
+    if (!state.phone.ready) return;            // 手機還在傳，按鈕本來就是灰的
+    const jobs = [
+      ...[...$('#f-audio').files].map((file) => ({
+        label: file.name, fill: (fd) => fd.append('audio', file) })),
+      ...state.phone.items.map((item) => ({
+        label: item.filename, fill: (fd) => fd.append('incoming', item.id) })),
+    ];
+    if (!jobs.length) return toast('請先選擇音檔', true);
 
     const shared = {
       model: $('#f-model').value,
@@ -777,18 +792,18 @@ function initNewDialog() {
     dlg.close();
 
     let first = null;
-    for (const [i, file] of files.entries()) {
+    for (const [i, job] of jobs.entries()) {
       const fd = new FormData();
-      fd.append('audio', file);
+      job.fill(fd);
       // A custom name only makes sense for a single file; otherwise use filenames.
-      fd.append('name', files.length === 1 ? nameOverride : '');
+      fd.append('name', jobs.length === 1 ? nameOverride : '');
       fd.append('language', $('#f-language').value || '');
       for (const [k, v] of Object.entries(shared)) fd.append(k, v);
       try {
         const res = await api('/api/projects', { method: 'POST', body: fd });
         if (i === 0) first = res.project;
       } catch (err) {
-        showError(`「${file.name}」上傳失敗`, err);
+        showError(`「${job.label}」上傳失敗`, err);
       }
     }
 
@@ -796,9 +811,137 @@ function initNewDialog() {
     $('#f-name').value = '';
     await loadProjects();
     if (first) openProject(first);
-    toast(files.length > 1 ? `已排入 ${files.length} 個錄音` : '已開始辨識');
+    toast(jobs.length > 1 ? `已排入 ${jobs.length} 個錄音` : '已開始辨識');
     startProjectPolling();
   };
+}
+
+/* ------------------------------------------------ 用手機傳（掃 QR code） */
+/* 伺服器是唯一的真相：手機連上沒、傳到哪、收到哪些檔案，都是每秒問一次。
+   QR 碼只在產生新的時候畫一次，清單照 data-id 增減，不整個重畫。 */
+function setSourceTab(which) {
+  const phone = which === 'phone';
+  $('#src-local').classList.toggle('on', !phone);
+  $('#src-phone').classList.toggle('on', phone);
+  $('#src-local-panel').hidden = phone;
+  $('#src-phone-panel').hidden = !phone;
+}
+
+function setPhoneStatus(text, cls = '') {
+  const el = $('#phone-status');
+  setText(el, text);
+  el.className = 'phone-status' + (cls ? ' ' + cls : '');
+}
+
+async function startPhone() {
+  clearInterval(state.phone.timer);
+  state.phone.timer = null;
+  state.phone.on = true;
+  setPhoneStatus('正在產生 QR 碼…');
+  try {
+    const res = await api('/api/phone/session', { method: 'POST' });
+    if (!state.phone.on) {           // 等的時候使用者已經切走了：把剛開的關掉
+      api('/api/phone/session', { method: 'DELETE' }).catch((e) => logError('關閉手機傳檔', e));
+      return;
+    }
+    $('#phone-qr').innerHTML = res.qr_svg;      // 伺服器產生的 SVG
+    setText($('#phone-url'), res.url);
+    renderPhoneStatus(res);
+    state.phone.timer = setInterval(pollPhone, 1000);
+  } catch (err) {
+    $('#phone-qr').innerHTML = '';
+    setText($('#phone-url'), '');
+    if (err.status === 409) {
+      setPhoneStatus(err.message, 'err');        // 沒有網路：直接寫在面板裡
+    } else {
+      setPhoneStatus('無法開啟手機傳檔', 'err');
+      showError('無法開啟手機傳檔', err);
+    }
+  }
+}
+
+function stopPhone() {
+  clearInterval(state.phone.timer);
+  state.phone.timer = null;
+  state.phone.ready = true;
+  updateStartGate();
+  if (!state.phone.on) return;
+  state.phone.on = false;
+  api('/api/phone/session', { method: 'DELETE' }).catch((err) => logError('關閉手機傳檔', err));
+}
+
+async function pollPhone() {
+  if (state.phone.polling) return;
+  state.phone.polling = true;
+  try {
+    const st = await api('/api/phone/session');
+    if (!state.phone.on) return;
+    if (!st.active) {                // 電腦睡著太久，QR 碼過期了：換一個新的
+      clearInterval(state.phone.timer);
+      state.phone.timer = null;
+      startPhone();
+      return;
+    }
+    renderPhoneStatus(st);
+    renderIncoming(st.incoming);
+  } catch (err) {
+    logError('手機傳檔狀態', err);   // 每秒一次，不跳對話框
+  } finally {
+    state.phone.polling = false;
+  }
+}
+
+function renderPhoneStatus(st) {
+  state.phone.ready = st.ready;
+  updateStartGate();
+  if (st.stalled) setPhoneStatus('手機傳送中斷', 'warn');
+  else if (st.outstanding > 0) setPhoneStatus(`接收中 ${st.batch_done}/${st.batch_total}，傳完才能開始`);
+  else if (st.claimed) setPhoneStatus(`已連線：${st.device}`, 'ok');
+  else setPhoneStatus('等待手機掃描…');
+}
+
+/* 手機宣告要傳的檔案還沒到齊前，開始辨識是灰的，免得少送幾個。 */
+function updateStartGate() {
+  $('#new-start').disabled = !state.phone.ready;
+}
+
+async function loadIncoming() {
+  try {
+    renderIncoming((await api('/api/incoming')).items);
+  } catch (err) {
+    logError('讀取手機傳來的檔案', err);
+  }
+}
+
+function renderIncoming(items) {
+  state.phone.items = items;
+  const list = $('#incoming-list');
+  const want = new Set(items.map((i) => i.id));
+  for (const li of $$('.incoming-row', list)) if (!want.has(li.dataset.id)) li.remove();
+  for (const item of items) {
+    if (list.querySelector(`.incoming-row[data-id="${item.id}"]`)) continue;
+    const li = document.createElement('li');
+    li.className = 'incoming-row';
+    li.dataset.id = item.id;
+    li.innerHTML = '<span class="incoming-name"></span><span class="incoming-size"></span>'
+                 + '<span class="pill run">來自手機</span>'
+                 + '<button type="button" class="incoming-x" title="移除這個檔案">×</button>';
+    li.querySelector('.incoming-name').textContent = item.filename;
+    li.querySelector('.incoming-name').title = item.filename;
+    li.querySelector('.incoming-size').textContent = `${(item.bytes / 1e6).toFixed(1)} MB`;
+    li.querySelector('.incoming-x').onclick = () => discardIncoming(item.id);
+    list.appendChild(li);
+  }
+  list.hidden = !items.length;
+}
+
+async function discardIncoming(id) {
+  try {
+    await api(`/api/incoming/${id}`, { method: 'DELETE' });
+  } catch (err) {
+    if (err.status !== 404) return showError('移除手機傳來的檔案失敗', err);
+  }
+  renderIncoming(state.phone.items.filter((i) => i.id !== id));
 }
 
 /* 有些模型需要指定語言（Cohere 沒指定就會整份空白），有些完全不吃這個參數。 */

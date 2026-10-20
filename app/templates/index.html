@@ -107,11 +107,35 @@
   <form method="dialog" id="form-new">
     <h2>新增會議</h2>
 
-    <label class="field">
+    {# div 而不是 label：裡面有好幾個按鈕，label 會把點擊轉給第一個 #}
+    <div class="field">
       <span>錄音檔</span>
-      <input type="file" id="f-audio" accept="{{ accept }}" multiple required>
-      <small>支援 m4a、mp3、wav、flac、mp4、wma、opus 等格式。<b>可以一次選多個檔案</b>，會依序排隊處理。</small>
-    </label>
+      <div class="src-tabs">
+        <button type="button" class="src-tab on" id="src-local">從這台電腦選</button>
+        <button type="button" class="src-tab" id="src-phone">用手機傳</button>
+      </div>
+
+      <div id="src-local-panel">
+        <input type="file" id="f-audio" accept="{{ accept }}" multiple>
+        <small>支援 m4a、mp3、wav、flac、mp4、wma、opus 等格式。<b>可以一次選多個檔案</b>，會依序排隊處理。</small>
+      </div>
+
+      {# 手機掃 QR 碼後在手機瀏覽器選檔，檔案傳到這台電腦，出現在下面的清單 #}
+      <div id="src-phone-panel" class="phone-panel" hidden>
+        <div class="phone-qr" id="phone-qr"></div>
+        <div class="phone-side">
+          <p class="phone-hint">用手機相機掃描，在手機上選擇錄音檔。手機和電腦要連同一個 Wi-Fi（或連上這台電腦的行動熱點）。</p>
+          <div class="phone-status" id="phone-status">等待手機掃描…</div>
+          <code class="phone-url" id="phone-url"></code>
+          <div><button type="button" class="btn sm" id="phone-renew">換一個 QR 碼</button></div>
+        </div>
+        <small class="phone-help">第一次使用時 Windows 會詢問是否允許 Python 存取網路，請按「允許」。<br>
+          手機掃了打不開？公司或飯店的 Wi-Fi 可能擋住裝置互連，改開這台電腦的行動熱點，讓手機連上再掃一次。</small>
+      </div>
+
+      {# 手機傳來、還沒用掉的檔案；關掉對話框也會留著 #}
+      <ul class="incoming-list" id="incoming-list" hidden></ul>
+    </div>
 
     <label class="field">
       <span>會議名稱</span>

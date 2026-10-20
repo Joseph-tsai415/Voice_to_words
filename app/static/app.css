@@ -336,6 +336,38 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .hint { font-size: 12.5px; color: var(--ink-3); margin: 0 0 14px; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
+/* 錄音檔來源：這台電腦 / 手機（QR code） */
+.src-tabs { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 9px;
+  border: 1px solid var(--line); border-radius: 99px; }
+.src-tab { border: 0; background: transparent; color: var(--ink-2); cursor: pointer;
+  font: 12.5px var(--sans); padding: 4px 12px; border-radius: 99px; }
+.src-tab.on { background: var(--accent); color: var(--accent-ink); }
+.phone-panel { display: grid; grid-template-columns: auto 1fr; gap: 12px 14px; align-items: start;
+  border: 1px dashed var(--line); border-radius: 12px; padding: 12px; background: var(--panel-2); }
+.phone-panel[hidden] { display: none; }
+.phone-qr { background: #fff; border-radius: 8px; line-height: 0; min-width: 120px; min-height: 120px; }
+.phone-qr svg { display: block; }
+.phone-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.phone-hint { margin: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; }
+.phone-status { font-size: 13px; font-weight: 600; color: var(--accent); }
+.phone-status.ok { color: var(--ok); }
+.phone-status.warn { color: var(--warn); }
+.phone-status.err { color: var(--danger); font-weight: 500; }
+.phone-url { font: 11.5px var(--mono); color: var(--ink-3); word-break: break-all; user-select: all; }
+.field .phone-help { grid-column: 1 / -1; margin-top: 0; line-height: 1.6; }
+.incoming-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.incoming-list[hidden] { display: none; }
+.incoming-row { display: flex; align-items: center; gap: 8px; font-size: 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  border-radius: 8px; padding: 6px 6px 6px 10px; }
+.incoming-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incoming-size { color: var(--ink-3); font-size: 12px; flex-shrink: 0; }
+.incoming-x { border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+.incoming-x:hover { color: var(--danger); background: var(--line-2); }
+@media (max-width: 560px) { .phone-panel { grid-template-columns: 1fr; } }
+
 .bar { height: 8px; background: var(--line-2); border-radius: 99px; overflow: hidden; }
 .bar-fill { height: 100%; width: 0; background: var(--accent);
   border-radius: 99px; transition: width .3s ease; }
