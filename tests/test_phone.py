@@ -146,10 +146,8 @@ def test_sessions() -> None:
     s.announce(3)
     check("宣告 3 個就等 3 個",
           s.status()["outstanding"] == 3 and not s.status()["ready"])
-    s.begin_upload("a.m4a", 10)
-    s.end_upload(True)
-    s.begin_upload("b.m4a", 10)
-    s.end_upload(False)
+    s.end_upload(True, s.begin_upload("a.m4a", 10))
+    s.end_upload(False, s.begin_upload("b.m4a", 10))
     st = s.status()
     check("成功、失敗都算傳完",
           st["batch_done"] == 2 and st["outstanding"] == 1 and not st["ready"], str(st))
@@ -159,10 +157,10 @@ def test_sessions() -> None:
     section("電腦那邊關掉就結束")
     tok3 = s.start()
     c3 = s.claim(tok3, None, "")[1]
-    s.begin_upload("c.m4a", 10)
+    running = s.begin_upload("c.m4a", 10)
     s.end()
     check("關掉後不能再傳新的", not s.authorize(tok3, c3))
-    s.end_upload(True)
+    s.end_upload(True, running)
     check("傳到一半的照樣收完，計數不會亂", s.in_flight() == 0)
     tok4 = s.start()
     t[0] += phone.SESSION_IDLE_SEC + 1
@@ -173,6 +171,28 @@ def test_sessions() -> None:
     s.heartbeat()
     t[0] += phone.SESSION_IDLE_SEC - 1
     check("有在輪詢就不過期", s.status()["active"])
+
+    section("上傳只算在開始它的那個 QR 碼")
+    s.start()
+    old = s.begin_upload("big.mov", 10)
+    s.start()                             # 換一個 QR 碼 while big.mov is still going
+    s.announce(2)
+    s.end_upload(True, old)
+    st = s.status()
+    check("舊 QR 碼的上傳不會扣到新的這批",
+          st["outstanding"] == 2 and st["batch_done"] == 0, str(st))
+    check("計數照樣歸零", s.in_flight() == 0)
+
+    section("卡住之後重傳是新的一批")
+    s.start()
+    s.announce(2)
+    s.end_upload(True, s.begin_upload("a.m4a", 10))
+    t[0] += phone.STALL_SEC + 1           # the second file never reached the server
+    s.announce(1)                         # 重試
+    st = s.status()
+    check("重試算新的一批，不會卡在 n/n+1",
+          st["outstanding"] == 1 and st["batch_total"] == 1 and st["batch_done"] == 0
+          and not st["stalled"], str(st))
     phone.clock = time.monotonic          # later sections use the real clock
 
 
@@ -250,6 +270,32 @@ def test_listener() -> None:
     phone.sessions.end()
     check("結束就關", phone.stop_listener_if_idle() and phone.listener_port() is None)
     check("關了就連不上", _refused(port))
+
+    section("手機斷線不會讓網路埠一直開著")
+    phone.SOCKET_TIMEOUT_SEC = 1.0        # 120 s in real use
+    tok = phone.sessions.start()
+    port = phone.ensure_listener("127.0.0.1")
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/u/{tok}", timeout=5) as resp:
+        cookie = resp.headers["Set-Cookie"].split(";", 1)[0]
+    phone.sessions.announce(1)
+    # Headers and a sliver of the body, then silence: the phone walked out of
+    # Wi-Fi range without the connection ever being closed.
+    silent = socket.create_connection(("127.0.0.1", port))
+    silent.sendall(f"PUT /u/{tok}/file HTTP/1.1\r\nHost: x\r\nCookie: {cookie}\r\n"
+                   "X-Filename: a.m4a\r\nContent-Length: 1000\r\n\r\n".encode() + b"x" * 10)
+    deadline = time.time() + 6
+    while time.time() < deadline and phone.sessions.in_flight() == 0:
+        time.sleep(0.05)
+    while time.time() < deadline and phone.sessions.in_flight() > 0:
+        time.sleep(0.1)
+    check("斷線的上傳會逾時結束", phone.sessions.in_flight() == 0)
+    check("逾時也算傳完，按鈕會回來", phone.sessions.status()["outstanding"] == 0,
+          str(phone.sessions.status()))
+    check("不留 .part", not list(incoming.INCOMING_DIR.glob("*/*.part")))
+    phone.sessions.end()
+    check("沒有卡住的上傳，網路埠就關得掉", phone.stop_listener_if_idle())
+    silent.close()
+    phone.SOCKET_TIMEOUT_SEC = 120.0
 
 
 def main() -> int:

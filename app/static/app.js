@@ -17,7 +17,8 @@ const state = {
   splitSeg: null,
   reworked: new Set(),
   // 用手機傳：on = QR 碼開著；ready = 手機宣告的檔案都到了；items = 手機傳來、還沒用掉的檔案
-  phone: { on: false, timer: null, polling: false, ready: true, items: [] },
+  // gen = 第幾次 startPhone()，舊的回應晚到就丟掉
+  phone: { on: false, timer: null, polling: false, ready: true, items: [], gen: 0 },
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -766,7 +767,8 @@ function initNewDialog() {
   $('#f-threads').onchange = () => updateThreadNote();
 
   $('#src-local').onclick = () => { setSourceTab('local'); stopPhone(); };
-  $('#src-phone').onclick = () => { setSourceTab('phone'); startPhone(); };
+  /* 已經在手機分頁再點一次不換 QR 碼：連著的手機會被踢掉，後面幾個檔案全部失效。 */
+  $('#src-phone').onclick = () => { setSourceTab('phone'); if (!state.phone.on) startPhone(); };
   $('#phone-renew').onclick = () => startPhone();
   /* 取消、Esc、開始辨識都會關掉對話框；QR 碼一起收掉，手機那邊就不能再傳。 */
   dlg.addEventListener('close', () => { stopPhone(); setSourceTab('local'); });
@@ -833,13 +835,19 @@ function setPhoneStatus(text, cls = '') {
   el.className = 'phone-status' + (cls ? ' ' + cls : '');
 }
 
+/* 同時只會有一個 startPhone() 算數：按鈕在等的時候是灰的，晚到的舊回應直接丟掉，
+   輪詢的計時器也只在最後一刻設一次——不然重疊呼叫會留下一個永遠在跑、
+   永遠在幫工作階段續命的計時器。 */
 async function startPhone() {
+  const gen = ++state.phone.gen;
   clearInterval(state.phone.timer);
   state.phone.timer = null;
   state.phone.on = true;
+  $('#phone-renew').disabled = true;
   setPhoneStatus('正在產生 QR 碼…');
   try {
     const res = await api('/api/phone/session', { method: 'POST' });
+    if (gen !== state.phone.gen) return;        // 後面又按了一次，交給新的那次
     if (!state.phone.on) {           // 等的時候使用者已經切走了：把剛開的關掉
       api('/api/phone/session', { method: 'DELETE' }).catch((e) => logError('關閉手機傳檔', e));
       return;
@@ -847,8 +855,10 @@ async function startPhone() {
     $('#phone-qr').innerHTML = res.qr_svg;      // 伺服器產生的 SVG
     setText($('#phone-url'), res.url);
     renderPhoneStatus(res);
+    clearInterval(state.phone.timer);
     state.phone.timer = setInterval(pollPhone, 1000);
   } catch (err) {
+    if (gen !== state.phone.gen) return;
     $('#phone-qr').innerHTML = '';
     setText($('#phone-url'), '');
     if (err.status === 409) {
@@ -857,6 +867,8 @@ async function startPhone() {
       setPhoneStatus('無法開啟手機傳檔', 'err');
       showError('無法開啟手機傳檔', err);
     }
+  } finally {
+    if (gen === state.phone.gen) $('#phone-renew').disabled = false;
   }
 }
 

@@ -17,7 +17,8 @@ The dialog keeps 開始辨識 disabled while files the phone announced are
 still on their way, so pressing it early cannot silently leave the rest
 out. A transfer that dies without the server noticing (the phone locked
 before its request arrived) would hold the button forever, so after
-STALL_SEC of no activity the outstanding files count as failed.
+STALL_SEC of no activity the button is released, and the next batch the
+phone announces - the 重試 - starts the count afresh.
 """
 from __future__ import annotations
 
@@ -83,6 +84,10 @@ class Sessions:
             self._s = s = None
         return s
 
+    @staticmethod
+    def _stalled(s: _Session) -> bool:
+        return s.outstanding > 0 and clock() - s.last_activity > STALL_SEC
+
     def start(self) -> str:
         with self._lock:
             now = clock()
@@ -137,32 +142,43 @@ class Sessions:
             s = self._live()
             if s is None:
                 return
-            if s.outstanding == 0:
+            # A stalled batch is over: the files it was waiting for are not
+            # coming, so they must not hang on as "接收中 1/3" over the retry.
+            if s.outstanding == 0 or self._stalled(s):
+                s.outstanding = 0
                 s.batch_total = s.batch_done = 0
             s.outstanding += max(0, count)
             s.batch_total += max(0, count)
             s.last_activity = clock()
 
-    def begin_upload(self, name: str, total: int | None) -> None:
+    def begin_upload(self, name: str, total: int | None) -> object:
+        """Count an upload in; returns the session it belongs to.
+
+        Pass that back to progress() and end_upload(). An upload can outlive
+        its session - 換一個 QR 碼 mid-transfer - and its finish must not
+        count against the new session's batch, or 開始辨識 opens while the
+        new batch is still on its way.
+        """
         with self._lock:
             self._in_flight += 1
             s = self._live()
             if s is not None:
                 s.receiving = {"name": name, "bytes": 0, "total": total}
                 s.last_activity = clock()
+            return s
 
-    def progress(self, nbytes: int) -> None:
+    def progress(self, nbytes: int, owner: object) -> None:
         with self._lock:
             s = self._live()
-            if s is not None and s.receiving is not None:
+            if s is not None and s is owner and s.receiving is not None:
                 s.receiving["bytes"] = nbytes
                 s.last_activity = clock()
 
-    def end_upload(self, ok: bool) -> None:
+    def end_upload(self, ok: bool, owner: object) -> None:
         with self._lock:
             self._in_flight = max(0, self._in_flight - 1)
             s = self._live()
-            if s is None:
+            if s is None or s is not owner:
                 return
             s.receiving = None
             if s.outstanding > 0:
@@ -181,7 +197,7 @@ class Sessions:
                 return {"active": False, "claimed": False, "device": "",
                         "outstanding": 0, "batch_total": 0, "batch_done": 0,
                         "receiving": None, "stalled": False, "ready": True}
-            stalled = s.outstanding > 0 and clock() - s.last_activity > STALL_SEC
+            stalled = self._stalled(s)
             return {
                 "active": True,
                 "claimed": s.device_hash is not None,
@@ -207,6 +223,12 @@ sessions = Sessions()
 # on the network while the feature is not in use.
 
 REAP_SEC = 5.0
+# A phone that walks out of Wi-Fi range, or that iOS suspends, can vanish
+# without closing its connection. With no timeout its upload would block in
+# recv() forever, keep in_flight above zero, and so keep this port open on
+# every interface until the server restarts. Applied per recv(), so a slow
+# but live transfer is unaffected.
+SOCKET_TIMEOUT_SEC = 120.0
 
 GONE = "此 QR 碼已失效，請在電腦上重新產生。"
 OTHER = "此 QR 碼已在另一台裝置使用。請在電腦上重新產生。"
@@ -283,11 +305,11 @@ def create_phone_app():
             return deny(token)
         # Headers are latin-1, so the page percent-encodes the name.
         name = unquote(request.headers.get("X-Filename", ""))
-        sessions.begin_upload(name, request.content_length)
+        owner = sessions.begin_upload(name, request.content_length)
         ok = False
         try:
             item = incoming.receive(request.stream, name, request.content_length,
-                                    sessions.progress)
+                                    lambda n: sessions.progress(n, owner))
             ok = True
             return jsonify(ok=True, item=item)
         except incoming.UnsupportedFile as exc:
@@ -296,19 +318,26 @@ def create_phone_app():
             log.warning("「%s」沒有傳完：%s", name, exc)
             return jsonify(error=INCOMPLETE), 400
         finally:
-            sessions.end_upload(ok)
+            sessions.end_upload(ok, owner)
 
     return app
 
 
 def ensure_listener(host: str = "0.0.0.0") -> int:
     """Start the phone listener if it is not running; return its port."""
-    from werkzeug.serving import make_server
+    from werkzeug.serving import WSGIRequestHandler, make_server
+
+    class _PhoneHandler(WSGIRequestHandler):
+        # The timeout surfaces as TimeoutError, which Werkzeug's LimitedStream
+        # turns into ClientDisconnected - upload() already answers that with
+        # a 400 and releases the upload.
+        timeout = SOCKET_TIMEOUT_SEC
 
     global _server
     with _srv_lock:
         if _server is None:
-            srv = make_server(host, 0, create_phone_app(), threaded=True)
+            srv = make_server(host, 0, create_phone_app(), threaded=True,
+                              request_handler=_PhoneHandler)
             threading.Thread(target=srv.serve_forever, name="phone-listener",
                              daemon=True).start()
             threading.Thread(target=_reap, args=(srv,), name="phone-reaper",
