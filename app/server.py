@@ -5,14 +5,15 @@ import logging
 import mimetypes
 import traceback
 from pathlib import Path
+from typing import Callable
 
 from flask import (Flask, Response, jsonify, render_template, request,
                    send_from_directory)
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
-from . import (asr, export, gpu, hub, leaderboard, memory,
-               project as store, punctuation, rework, speakers, tidy,
+from . import (asr, export, gpu, hub, incoming, lanaddr, leaderboard, memory,
+               phone, project as store, punctuation, rework, speakers, tidy,
                vocabulary)
 from .audio import (SUPPORTED_SUFFIXES, probe_duration, unsupported_reason,
                     upload_name_and_suffix)
@@ -48,6 +49,12 @@ def create_app() -> Flask:
             "有 %d 個殘留的資料夾（沒有 project.json，介面看不到），共約 %.0f MB：%s。"
             "確定不要了就直接刪掉 data/projects/ 底下這幾個資料夾。",
             len(orphans), total, "、".join(o["id"] for o in orphans))
+
+    # Phone transfers a previous server never finished. They do not resume,
+    # so a half file is worth nothing.
+    partial = incoming.cleanup_partials()
+    if partial:
+        log.warning("清掉 %d 個上次沒傳完的手機檔案", partial)
 
     # A dialog can't be copy-pasted, so every failure is also written to the
     # terminal in full, and the traceback is handed to the browser console.
@@ -205,19 +212,40 @@ def create_app() -> Flask:
 
     @app.post("/api/projects")
     def api_project_create() -> Response:
-        upload = request.files.get("audio")
-        if upload is None or not upload.filename:
-            return jsonify(error="請選擇一個音檔。"), 400
+        item_id = request.form.get("incoming")
+        if item_id:
+            # A file the phone already sent: it is on disk, so move it into
+            # place rather than have the browser send it a second time.
+            item = incoming.get(item_id)
+            if item is None:
+                return jsonify(error="這個檔案已經不在了，可能已經用過或刪掉。"), 404
+            display_name, suffix = item["name"], item["suffix"]
 
-        # Not secure_filename(): it strips non-ASCII, so a Chinese recording
-        # name collapses to its own extension and the suffix comes out empty.
-        # Nothing here reaches the filesystem except the suffix, which is
-        # whitelisted below.
-        display_name, suffix = upload_name_and_suffix(upload.filename)
+            def place(dest: Path) -> None:
+                incoming.take(item_id, dest)
+        else:
+            upload = request.files.get("audio")
+            if upload is None or not upload.filename:
+                return jsonify(error="請選擇一個音檔。"), 400
+            # Not secure_filename(): it strips non-ASCII, so a Chinese recording
+            # name collapses to its own extension and the suffix comes out empty.
+            # Nothing here reaches the filesystem except the suffix, which is
+            # whitelisted below.
+            display_name, suffix = upload_name_and_suffix(upload.filename)
+            place = upload.save
+
         reason = unsupported_reason(suffix)
         if reason:
             return jsonify(error=reason), 400
+        return _queue_new_project(display_name, suffix, place)
 
+    def _queue_new_project(display_name: str, suffix: str,
+                           place: Callable[[Path], None]) -> Response:
+        """Validate the dialog's settings, create the project, queue the work.
+
+        `place(dest)` puts the recording at `source<suffix>`: a browser
+        upload saves itself there, a phone file is moved there.
+        """
         model = request.form.get("model") or DEFAULT_MODEL
         if model not in ASR_MODELS:
             return jsonify(error=f"未知的模型 {model}"), 400
@@ -258,7 +286,12 @@ def create_app() -> Flask:
         # Many uploads can be in flight at once.
         proj = store.create(name, 0.0, model, zh_mode, options)
         source = store.project_dir(proj["id"]) / f"source{suffix}"
-        upload.save(source)
+        try:
+            place(source)
+        except FileNotFoundError:
+            # The phone file was discarded between the check and now.
+            store.delete(proj["id"])
+            return jsonify(error="這個檔案已經不在了，可能已經用過或刪掉。"), 404
 
         duration = probe_duration(source)      # header only, no decode
         if duration:
@@ -268,6 +301,43 @@ def create_app() -> Flask:
         log.info("新專案 %s「%s」已排入佇列（%s，%.0f 秒）",
                  proj["id"], name, model, duration)
         return jsonify(project=proj["id"], job=record)
+
+    # ---------------------------------------------------------- phone upload
+    # The phone never talks to this app - it reaches the separate listener in
+    # phone.py. These routes are the laptop's side: show the QR, poll for
+    # what arrived, and hand held files to POST /api/projects above.
+    @app.post("/api/phone/session")
+    def api_phone_session_start() -> Response:
+        """A fresh QR code. Also what 換一個 QR 碼 calls: the old one dies."""
+        host = lanaddr.lan_ip()
+        if host is None:
+            return jsonify(error="找不到這台電腦的網路位址。請先連上 Wi-Fi，或開啟行動熱點。"), 409
+        token = phone.sessions.start()       # before the listener, so the reaper sees it
+        port = phone.ensure_listener()
+        url = phone.phone_url(host, port, token)
+        return jsonify(**phone.sessions.status(), url=url, qr_svg=phone.qr_svg(url))
+
+    @app.get("/api/phone/session")
+    def api_phone_session() -> Response:
+        """Polled every second by the dialog; the poll is also the heartbeat."""
+        phone.sessions.heartbeat()
+        return jsonify(**phone.sessions.status(), incoming=incoming.items())
+
+    @app.delete("/api/phone/session")
+    def api_phone_session_end() -> Response:
+        phone.sessions.end()
+        phone.stop_listener_if_idle()
+        return jsonify(ok=True)
+
+    @app.get("/api/incoming")
+    def api_incoming() -> Response:
+        return jsonify(items=incoming.items())
+
+    @app.delete("/api/incoming/<item_id>")
+    def api_incoming_discard(item_id: str) -> Response:
+        if not incoming.discard(item_id):
+            return jsonify(error="這個檔案已經不在了。"), 404
+        return jsonify(ok=True)
 
     @app.post("/api/projects/<pid>/cancel")
     def api_project_cancel(pid: str) -> Response:

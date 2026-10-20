@@ -38,15 +38,16 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def request(method: str, url: str, body=None, files=None, timeout: int = 180):
-    if files:
+def request(method: str, url: str, body=None, files=None, timeout: int = 180,
+            form: bool = False):
+    if files or form:
         boundary = "----scribe-test-boundary"
         buf = io.BytesIO()
         for key, value in (body or {}).items():
             buf.write(f"--{boundary}\r\n".encode())
             buf.write(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode())
             buf.write(str(value).encode("utf-8") + b"\r\n")
-        for key, path in files.items():
+        for key, path in (files or {}).items():
             buf.write(f"--{boundary}\r\n".encode())
             buf.write(
                 f'Content-Disposition: form-data; name="{key}"; '
@@ -81,6 +82,81 @@ def request(method: str, url: str, body=None, files=None, timeout: int = 180):
             return exc.code, json.loads(raw)
         except json.JSONDecodeError:
             return exc.code, raw
+
+
+def _raw(method: str, url: str, data: bytes | None = None,
+         headers: dict | None = None) -> tuple[int, dict, str]:
+    """A request the way the phone page makes it: raw body, own headers."""
+    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status, dict(resp.headers), resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers), exc.read().decode("utf-8", "replace")
+
+
+def check_phone_upload(base: str, audio: Path, n_voices: int) -> None:
+    """Scan -> pick -> send from the phone, then start the meeting on the laptop."""
+    from urllib.parse import quote, urlsplit
+
+    print("\n手機傳檔")
+    status, sess = request("POST", base + "/api/phone/session")
+    if not check("開啟手機傳檔", status == 200 and "<svg" in str(sess.get("qr_svg", "")),
+                 f"{status} {str(sess)[:120]}"):
+        return
+    parts = urlsplit(sess["url"])
+    token = parts.path.rsplit("/", 1)[-1]
+    # The listener binds every interface, so loopback reaches it too.
+    phone = f"http://127.0.0.1:{parts.port}/u/{token}"
+
+    status, headers, page = _raw("GET", phone, headers={"User-Agent": "iPhone Safari"})
+    cookie = (headers.get("Set-Cookie") or "").split(";", 1)[0]
+    check("手機打開頁面", status == 200 and cookie.startswith("scribe_dev="),
+          f"{status} {cookie[:30]}")
+    status, _, _ = _raw("GET", phone)
+    check("另一台手機被拒", status == 403, str(status))
+
+    _raw("POST", phone + "/batch", json.dumps({"count": 1}).encode(),
+         {"Content-Type": "application/json", "Cookie": cookie})
+    _, st = request("GET", base + "/api/phone/session")
+    check("手機還在傳就不能開始", st.get("ready") is False, str(st)[:160])
+
+    status, _, body = _raw("PUT", phone + "/file", audio.read_bytes(),
+                           {"X-Filename": quote("手機錄音.wav"), "Cookie": cookie})
+    check("手機傳上來", status == 200, f"{status} {body[:120]}")
+    sent = json.loads(body).get("item", {}) if status == 200 else {}
+    _, st = request("GET", base + "/api/phone/session")
+    # Matched by id, not name: a run interrupted earlier may have left one.
+    held = [i for i in st.get("incoming", []) if i["id"] == sent.get("id")]
+    check("傳完就可以開始", st.get("ready") is True, str(st)[:160])
+    check("電腦這邊看得到檔案",
+          len(held) == 1 and held[0]["filename"] == "手機錄音.wav",
+          str(st.get("incoming"))[:160])
+    if not held:
+        return
+
+    status, resp = request("POST", base + "/api/projects", form=True,
+                           body={"incoming": held[0]["id"], "model": "sense-voice",
+                                 "num_speakers": n_voices})
+    check("用手機傳來的檔案開新會議", status == 200 and "project" in resp, str(resp)[:160])
+    _, waiting = request("GET", base + "/api/incoming")
+    check("用掉的檔案不再列出",
+          all(i["id"] != held[0]["id"] for i in waiting.get("items", [])))
+    if status == 200:
+        request("POST", f"{base}/api/projects/{resp['project']}/cancel")
+        request("DELETE", f"{base}/api/projects/{resp['project']}", timeout=30)
+
+    status, _ = request("DELETE", base + "/api/phone/session")
+    check("關掉手機傳檔", status == 200)
+    refused = False
+    for _ in range(20):
+        try:
+            socket.create_connection(("127.0.0.1", parts.port), timeout=0.5).close()
+        except OSError:
+            refused = True
+            break
+        time.sleep(0.1)
+    check("關掉後手機連不上", refused)
 
 
 TEST_LINES = [
@@ -481,6 +557,8 @@ def main() -> int:
                 request("DELETE", f"{base}/api/projects/{x}", timeout=30)
             except Exception as exc:            # cleanup is best-effort
                 print(f"    (清理 {x} 失敗：{exc})")
+
+        check_phone_upload(base, audio, n_voices)
 
         # --------------------------------------------------------- 錯誤處理
         status, _ = request("GET", base + "/api/projects/does-not-exist")
