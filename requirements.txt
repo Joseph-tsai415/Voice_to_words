@@ -5,3 +5,4 @@ soxr>=1.0
 av>=15.0
 flask>=3.0
 opencc-python-reimplemented>=0.1.7
+segno>=1.6
