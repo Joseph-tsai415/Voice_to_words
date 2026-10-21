@@ -116,7 +116,7 @@ function setState(row, state, text, pct) {
     row.retry.textContent = '重試';
     row.retry.onclick = async () => {
       setState(row, 'waiting', '等待中', 0);
-      try { await announce(1); } catch (e) { setState(row, 'err', '✗ ' + e.message); return; }
+      try { await announce([row.file]); } catch (e) { setState(row, 'err', '✗ ' + e.message); return; }
       await send(row);
       updateDone();
     };
@@ -130,13 +130,13 @@ function updateDone() {
   done.hidden = !(sent > 0 && !busy);
 }
 
-/* 先告訴電腦總共要傳幾個，電腦才知道還要等。 */
-async function announce(count) {
+/* 先告訴電腦要傳哪些檔案（檔名、大小），電腦馬上列出來，也知道還要等幾個。 */
+async function announce(files) {
   let res;
   try {
     res = await fetch(`/u/${TOKEN}/batch`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count }),
+      body: JSON.stringify({ files: files.map((f) => ({ name: f.name, size: f.size })) }),
     });
   } catch (_) {
     throw new Error(UNREACHABLE);
@@ -191,7 +191,7 @@ document.getElementById('pick').addEventListener('change', async (ev) => {
   if (!ready.length) return;
 
   try {
-    await announce(ready.length);
+    await announce(ready.map((row) => row.file));
   } catch (e) {
     ready.forEach((row) => setState(row, 'err', '✗ ' + e.message));
     return;

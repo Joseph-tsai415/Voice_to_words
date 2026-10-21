@@ -196,6 +196,50 @@ def test_sessions() -> None:
     phone.clock = time.monotonic          # later sections use the real clock
 
 
+def _rows(s) -> list[tuple]:
+    return [(f["name"], f["size"], f["bytes"], f["state"]) for f in s.status()["files"]]
+
+
+def test_progress_on_laptop() -> None:
+    section("手機一選好，電腦就看得到每個檔案")
+    s = phone.sessions
+    s.start()
+    s.announce(2, [{"name": "孟青宴安討論.m4a", "size": 100}, {"name": "客戶訪談.mov", "size": 2000}])
+    check("檔名、大小一選好就到",
+          _rows(s) == [("孟青宴安討論.m4a", 100, 0, "waiting"), ("客戶訪談.mov", 2000, 0, "waiting")],
+          str(_rows(s)))
+    batch = s.status()["batch"]
+    up = s.begin_upload("客戶訪談.mov", 2000)        # matched by name, not order
+    s.progress(800, up)
+    check("傳送中看得到進度，對到正確的那一列",
+          _rows(s) == [("孟青宴安討論.m4a", 100, 0, "waiting"), ("客戶訪談.mov", 2000, 800, "sending")],
+          str(_rows(s)))
+    s.end_upload(True, up)
+    check("傳完標成已收到", _rows(s)[1] == ("客戶訪談.mov", 2000, 2000, "done"), str(_rows(s)))
+    check("計數跟清單一致",
+          s.status()["batch_done"] == 1 and s.status()["outstanding"] == 1
+          and s.status()["batch_total"] == 2)
+    s.end_upload(False, s.begin_upload("孟青宴安討論.m4a", 100))
+    check("沒傳完標成失敗", _rows(s)[0][3] == "failed", str(_rows(s)))
+
+    s.announce(1, [{"name": "孟青宴安討論.m4a", "size": 100}])     # 重試
+    check("重試是新的一批：舊的列清掉，不會重複",
+          _rows(s) == [("孟青宴安討論.m4a", 100, 0, "waiting")] and s.status()["batch"] != batch,
+          str(_rows(s)))
+
+    section("一批還沒傳完就重試，用回原本那一列")
+    s.start()
+    s.announce(2, [{"name": "a.m4a", "size": 10}, {"name": "b.m4a", "size": 10}])
+    s.end_upload(False, s.begin_upload("a.m4a", 10))
+    s.announce(1, [{"name": "a.m4a", "size": 10}])
+    st = s.status()
+    check("失敗的那列回到等待中，不多一列",
+          _rows(s) == [("a.m4a", 10, 0, "waiting"), ("b.m4a", 10, 0, "waiting")]
+          and st["outstanding"] == 2 and st["batch_total"] == 2 and st["batch_done"] == 0,
+          f"{_rows(s)} {st['outstanding']}/{st['batch_total']}")
+    s.end()
+
+
 def _http_status(url: str) -> int:
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -233,7 +277,17 @@ def test_phone_app() -> None:
     check("亂猜的 token 是 404",
           r.status_code == 404 and "此 QR 碼已失效" in r.get_data(as_text=True))
     check("別台不能宣告", b.post(f"/u/{tok}/batch", json={"count": 1}).status_code == 403)
-    a.post(f"/u/{tok}/batch", json={"count": 2})
+    r = a.post(f"/u/{tok}/batch",
+               json={"files": [{"name": 5}, "junk", {"name": "a.m4a", "size": "big"}, {"size": 3}]})
+    check("亂寫的檔案清單不會讓伺服器出錯",
+          r.status_code == 200
+          and [(f["name"], f["size"]) for f in phone.sessions.status()["files"]] == [("a.m4a", None)],
+          str(phone.sessions.status()["files"]))
+    tok = phone.sessions.start()          # a clean session for the rest
+    a, b = app.test_client(), app.test_client()
+    a.get(f"/u/{tok}", headers={"User-Agent": IPHONE_SAFARI})
+    a.post(f"/u/{tok}/batch", json={"files": [{"name": "孟青宴安討論.m4a", "size": 5000},
+                                              {"name": "短.m4a", "size": 100}]})
     r = a.put(f"/u/{tok}/file", data=b"m" * 5000,
               headers={"X-Filename": quote("孟青宴安討論.m4a")})
     check("中文檔名經過 header 還是對的",
@@ -301,6 +355,7 @@ def test_listener() -> None:
 def main() -> int:
     test_pick_address()
     test_sessions()
+    test_progress_on_laptop()
     with tempfile.TemporaryDirectory() as tmp:
         # Never touch the real data/ folder while testing.
         incoming.INCOMING_DIR = Path(tmp) / "incoming"

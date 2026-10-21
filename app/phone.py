@@ -27,7 +27,7 @@ import logging
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 log = logging.getLogger("scribe.phone")
@@ -64,10 +64,35 @@ class _Session:
     last_activity: float                 # last sign of the phone sending
     device_hash: str | None = None       # sha256 of the claiming browser's cookie
     device: str = ""
-    outstanding: int = 0
-    batch_total: int = 0
-    batch_done: int = 0
-    receiving: dict | None = None
+    # This batch, one entry per file: {"name", "size", "bytes", "state"} with
+    # state waiting -> sending -> done | failed. The laptop draws a row per
+    # entry, and every count it shows is derived from this list, so the rows
+    # and the "接收中 1/3" above them cannot disagree.
+    files: list[dict] = field(default_factory=list)
+    batch: int = 0                       # bumps when a fresh batch starts
+
+
+@dataclass
+class _Upload:
+    """What begin_upload() hands back: the session and the row it fills."""
+    session: _Session | None
+    entry: dict | None
+
+
+def _clean_files(files: list) -> list[dict]:
+    """The phone's list of picked files, minus anything malformed."""
+    out = []
+    for f in files:
+        if not isinstance(f, dict) or not isinstance(f.get("name"), str) or not f["name"]:
+            continue
+        size = f.get("size")
+        ok = isinstance(size, int) and not isinstance(size, bool) and size >= 0
+        out.append({"name": f["name"][:255], "size": size if ok else None})
+    return out
+
+
+def _outstanding(s: _Session) -> int:
+    return sum(1 for f in s.files if f["state"] in ("waiting", "sending"))
 
 
 class Sessions:
@@ -86,7 +111,17 @@ class Sessions:
 
     @staticmethod
     def _stalled(s: _Session) -> bool:
-        return s.outstanding > 0 and clock() - s.last_activity > STALL_SEC
+        return _outstanding(s) > 0 and clock() - s.last_activity > STALL_SEC
+
+    def _fresh_batch_if_over(self, s: _Session) -> None:
+        """Start a new batch when nothing is on its way. Lock held.
+
+        A stalled batch counts as over: the files it was waiting for are not
+        coming, so they must not hang on as "接收中 1/3" over the retry.
+        """
+        if _outstanding(s) == 0 or self._stalled(s):
+            s.files = []
+            s.batch += 1
 
     def start(self) -> str:
         with self._lock:
@@ -137,53 +172,77 @@ class Sessions:
                         and _same(s.token, token or "")
                         and _same(_hash(cookie), s.device_hash))
 
-    def announce(self, count: int) -> None:
+    def announce(self, count: int, files: list | None = None) -> None:
+        """The phone picked files: put a waiting row on the laptop for each.
+
+        `files` carries names and sizes so the rows appear the moment the
+        files are picked, before a byte has moved; without it, `count`
+        nameless rows. A retry of a file that failed in a batch still in
+        progress reuses its row rather than adding a second one.
+        """
         with self._lock:
             s = self._live()
             if s is None:
                 return
-            # A stalled batch is over: the files it was waiting for are not
-            # coming, so they must not hang on as "接收中 1/3" over the retry.
-            if s.outstanding == 0 or self._stalled(s):
-                s.outstanding = 0
-                s.batch_total = s.batch_done = 0
-            s.outstanding += max(0, count)
-            s.batch_total += max(0, count)
+            entries = (_clean_files(files) if files is not None
+                       else [{"name": "", "size": None}] * max(0, count))
+            self._fresh_batch_if_over(s)
+            for e in entries:
+                failed = next((f for f in s.files if f["state"] == "failed"
+                               and e["name"] and f["name"] == e["name"]), None)
+                if failed is not None:
+                    failed.update(state="waiting", bytes=0,
+                                  size=e["size"] if e["size"] is not None else failed["size"])
+                else:
+                    s.files.append({"name": e["name"], "size": e["size"],
+                                    "bytes": 0, "state": "waiting"})
             s.last_activity = clock()
 
-    def begin_upload(self, name: str, total: int | None) -> object:
-        """Count an upload in; returns the session it belongs to.
+    def begin_upload(self, name: str, total: int | None) -> _Upload:
+        """Count an upload in; returns the session and row it belongs to.
 
         Pass that back to progress() and end_upload(). An upload can outlive
         its session - 換一個 QR 碼 mid-transfer - and its finish must not
         count against the new session's batch, or 開始辨識 opens while the
-        new batch is still on its way.
+        new batch is still on its way. Rows are matched by name, so a
+        retried file fills its own row whatever order things arrive in.
         """
         with self._lock:
             self._in_flight += 1
             s = self._live()
-            if s is not None:
-                s.receiving = {"name": name, "bytes": 0, "total": total}
-                s.last_activity = clock()
-            return s
+            if s is None:
+                return _Upload(None, None)
+            waiting = [f for f in s.files if f["state"] == "waiting"]
+            entry = (next((f for f in waiting if f["name"] == name), None)
+                     or next((f for f in waiting if not f["name"]), None))
+            if entry is None:                # sent without being announced
+                self._fresh_batch_if_over(s)
+                entry = {"name": name, "size": total, "bytes": 0, "state": "waiting"}
+                s.files.append(entry)
+            entry.update(name=name, state="sending", bytes=0)
+            if total is not None:
+                entry["size"] = total
+            s.last_activity = clock()
+            return _Upload(s, entry)
 
-    def progress(self, nbytes: int, owner: object) -> None:
+    def progress(self, nbytes: int, upload: _Upload) -> None:
         with self._lock:
             s = self._live()
-            if s is not None and s is owner and s.receiving is not None:
-                s.receiving["bytes"] = nbytes
+            if s is not None and upload.session is s:
+                upload.entry["bytes"] = nbytes
                 s.last_activity = clock()
 
-    def end_upload(self, ok: bool, owner: object) -> None:
+    def end_upload(self, ok: bool, upload: _Upload) -> None:
         with self._lock:
             self._in_flight = max(0, self._in_flight - 1)
             s = self._live()
-            if s is None or s is not owner:
+            if s is None or upload.session is not s:
                 return
-            s.receiving = None
-            if s.outstanding > 0:
-                s.outstanding -= 1
-                s.batch_done += 1
+            entry = upload.entry
+            entry["state"] = "done" if ok else "failed"
+            if ok:
+                entry["size"] = entry["size"] if entry["size"] is not None else entry["bytes"]
+                entry["bytes"] = entry["size"]
             s.last_activity = clock()
 
     def in_flight(self) -> int:
@@ -196,18 +255,20 @@ class Sessions:
             if s is None:
                 return {"active": False, "claimed": False, "device": "",
                         "outstanding": 0, "batch_total": 0, "batch_done": 0,
-                        "receiving": None, "stalled": False, "ready": True}
+                        "files": [], "batch": 0, "stalled": False, "ready": True}
             stalled = self._stalled(s)
+            outstanding = _outstanding(s)
             return {
                 "active": True,
                 "claimed": s.device_hash is not None,
                 "device": s.device,
-                "outstanding": s.outstanding,
-                "batch_total": s.batch_total,
-                "batch_done": s.batch_done,
-                "receiving": dict(s.receiving) if s.receiving else None,
+                "outstanding": outstanding,
+                "batch_total": len(s.files),
+                "batch_done": len(s.files) - outstanding,
+                "files": [dict(f) for f in s.files],
+                "batch": s.batch,
                 "stalled": stalled,
-                "ready": s.outstanding == 0 or stalled,
+                "ready": outstanding == 0 or stalled,
             }
 
 
@@ -292,11 +353,16 @@ def create_phone_app():
     def batch(token: str):
         if not sessions.authorize(token, request.cookies.get(COOKIE)):
             return deny(token)
-        try:
-            count = int((request.get_json(silent=True) or {}).get("count", 0))
-        except (TypeError, ValueError):
-            count = 0
-        sessions.announce(count)
+        data = request.get_json(silent=True)
+        data = data if isinstance(data, dict) else {}
+        files = data.get("files")
+        if isinstance(files, list):
+            sessions.announce(len(files), files)
+        else:
+            try:
+                sessions.announce(int(data.get("count", 0)))
+            except (TypeError, ValueError):
+                sessions.announce(0)
         return jsonify(ok=True)
 
     @app.put("/u/<token>/file")

@@ -877,6 +877,7 @@ function stopPhone() {
   state.phone.timer = null;
   state.phone.ready = true;
   updateStartGate();
+  renderPending(null);               // 不再輪詢，還在路上的那幾列會過時
   if (!state.phone.on) return;
   state.phone.on = false;
   api('/api/phone/session', { method: 'DELETE' }).catch((err) => logError('關閉手機傳檔', err));
@@ -906,6 +907,7 @@ async function pollPhone() {
 function renderPhoneStatus(st) {
   state.phone.ready = st.ready;
   updateStartGate();
+  renderPending(st);
   if (st.stalled) setPhoneStatus('手機傳送中斷', 'warn');
   else if (st.outstanding > 0) setPhoneStatus(`接收中 ${st.batch_done}/${st.batch_total}，傳完才能開始`);
   else if (st.claimed) setPhoneStatus(`已連線：${st.device}`, 'ok');
@@ -940,11 +942,57 @@ function renderIncoming(items) {
                  + '<button type="button" class="incoming-x" title="移除這個檔案">×</button>';
     li.querySelector('.incoming-name').textContent = item.filename;
     li.querySelector('.incoming-name').title = item.filename;
-    li.querySelector('.incoming-size').textContent = `${(item.bytes / 1e6).toFixed(1)} MB`;
+    li.querySelector('.incoming-size').textContent = mb(item.bytes);
     li.querySelector('.incoming-x').onclick = () => discardIncoming(item.id);
-    list.appendChild(li);
+    list.insertBefore(li, list.querySelector('.pending-row'));   // 排在還在傳的前面
   }
-  list.hidden = !items.length;
+  updateIncomingVisibility();
+}
+
+function mb(bytes) {
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+function updateIncomingVisibility() {
+  const list = $('#incoming-list');
+  list.hidden = !list.children.length;
+}
+
+/* 手機一選好檔案，這裡就列出來：等待中 → 進度條 → 傳完變成上面那種「來自手機」的列。
+   跟已收到的檔案同一個清單，排在後面；傳完的那列在同一次輪詢裡被已收到的列取代。
+   用 data-key（第幾批-第幾個）原地更新，進度條才會順順地走，不會每秒重畫。 */
+function renderPending(st) {
+  const list = $('#incoming-list');
+  const want = new Map();
+  ((st && st.files) || []).forEach((f, i) => {
+    if (f.state !== 'done') want.set(`${st.batch}-${i}`, f);
+  });
+  for (const li of $$('.pending-row', list)) if (!want.has(li.dataset.key)) li.remove();
+  for (const [key, f] of want) {
+    let li = list.querySelector(`.pending-row[data-key="${key}"]`);
+    if (!li) {
+      li = document.createElement('li');
+      li.className = 'pending-row';
+      li.dataset.key = key;
+      li.innerHTML = '<div class="pending-top"><span class="pending-name"></span>'
+                   + '<span class="pending-meta"></span></div>'
+                   + '<div class="bar thin" hidden><div class="bar-fill"></div></div>';
+      list.appendChild(li);
+    }
+    const failed = f.state === 'failed' || st.stalled;
+    const sending = f.state === 'sending' && !failed;
+    const pct = f.size ? Math.min(100, Math.floor((f.bytes / f.size) * 100)) : 0;
+    setText(li.querySelector('.pending-name'), f.name || '手機檔案');
+    setText(li.querySelector('.pending-meta'),
+      failed ? '✗ 沒傳完，請在手機上按重試'
+        : sending ? (f.size ? `${pct}% · ${mb(f.bytes)} / ${mb(f.size)}` : mb(f.bytes))
+        : (f.size != null ? `等待中 · ${mb(f.size)}` : '等待中'));
+    li.classList.toggle('wait', !sending && !failed);
+    li.classList.toggle('err', failed);
+    li.querySelector('.bar').hidden = !sending;
+    li.querySelector('.bar-fill').style.width = `${pct}%`;
+  }
+  updateIncomingVisibility();
 }
 
 async function discardIncoming(id) {

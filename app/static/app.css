@@ -366,6 +366,18 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .incoming-x { border: 0; background: transparent; color: var(--ink-3); cursor: pointer;
   font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
 .incoming-x:hover { color: var(--danger); background: var(--line-2); }
+/* 手機那邊選好、還在傳的檔案 */
+.pending-row { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+  font-size: 13px; background: var(--panel); }
+.pending-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.pending-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-meta { color: var(--ink-3); font-size: 12px; flex-shrink: 0;
+  font-variant-numeric: tabular-nums; }
+.pending-row.wait { color: var(--ink-3); }
+.pending-row.err { border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, var(--panel)); }
+.pending-row.err .pending-meta { color: var(--danger); }
+.pending-row .bar[hidden] { display: none; }
 @media (max-width: 560px) { .phone-panel { grid-template-columns: 1fr; } }
 
 .bar { height: 8px; background: var(--line-2); border-radius: 99px; overflow: hidden; }
