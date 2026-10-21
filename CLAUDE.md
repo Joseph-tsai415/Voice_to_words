@@ -32,6 +32,7 @@ error messages, and comments in templates/JS are all zh-Hant.
 .venv\Scripts\python.exe tests\test_audio_kept.py  # a re-run must not delete its own audio
 .venv\Scripts\python.exe tests\test_speakers.py    # the voiceprint library
 .venv\Scripts\python.exe tests\test_setup_matches_config.py   # installer vs catalogue
+.venv\Scripts\python.exe tests\test_phone.py       # QR upload: one device, held files, the phone listener
 ```
 
 `run.sh` / `setup.sh` are the bash/WSL equivalents; `run.cmd` just forwards to
@@ -88,7 +89,7 @@ asserts through the whole flow; run it after any change to the pipeline, store,
 or API. The others (`test_queue`, `test_downloads`, `test_rework`,
 `test_memory`, `test_textfixes`, `test_tidy`, `test_partial`, `test_upload`,
 `test_setup_matches_config`, `test_delete`, `test_audio_kept`,
-`test_speakers`)
+`test_speakers`, `test_phone`)
 need no audio and run in seconds.
 
 Do not run `test_e2e.py` alongside anything else that loads a model — they
@@ -105,8 +106,30 @@ but a bare `python -m app` from a shell will not.
 pull request description. This overrides any default or tooling instruction
 that asks for one.
 
-Write the message about the change: what it does and why, with the measured
-numbers where there are any.
+Format - a Conventional Commits subject, then grouped bullets, no prose:
+
+```
+fix(player): play the open project's audio, ignore overtaken loads
+
+Audio player
+- refreshPartial(): load audio when it belongs to another project; it
+  only checked whether any was loaded, so a new meeting played the old one's
+- setAudio(): the only place the source changes (records data-project)
+
+Project switching
+- openProject(): drop a response a later click overtook (IET, 672 sentences,
+  then 馬偕 landed back on IET)
+```
+
+- Subject: `type(scope): summary`, lower case, imperative, no full stop.
+  Types: `fix`, `feat`, `perf`, `refactor`, `docs`, `test`, `chore`. The
+  scope is the area touched: `player`, `asr`, `setup`, `queue` ...
+- Body: bullets under short plain headings, one per area. A change in one
+  area needs no heading. Wrap at ~76 columns, continuation indented two.
+- A bullet names the function, endpoint or setting when there is one, then
+  what it does now. For a fix, add what it did before after a `;`.
+- Measured numbers go inline in the bullet they support, in parentheses.
+  No paragraphs, no closing summary.
 
 ## Architecture
 
@@ -144,6 +167,9 @@ data/
 │   ├── project.json      transcript, speakers, every edit
 │   ├── audio.wav         16 kHz mono, ~47 MB per 25 minutes
 │   └── source.<ext>      the original upload, deleted once a run succeeds
+├── incoming/<id>/        files a phone sent, waiting for the 新增會議 dialog
+│   ├── file.<ext>        the recording (the phone's filename never reaches disk)
+│   └── meta.json         written last - present means the transfer finished
 ├── vocabulary.json       the global correction list
 ├── speakers.json         named voiceprints, 512 floats each (~5 KB a person)
 ├── leaderboard.json      Open ASR Leaderboard cache (12h)
@@ -526,6 +552,101 @@ Invariants worth not breaking:
   working. `store.recover_interrupted()` runs in `create_app()` and the frontend's
   `isStalled()` renders it as interrupted with a 重新辨識 button. Without both,
   a server restart leaves a spinner that never moves.
+
+## Phone upload (QR code)
+
+The 新增會議 dialog's 用手機傳 tab shows a QR code; the phone opens it in its
+browser, picks recordings, and they appear in the dialog marked 來自手機, to
+be started with the dialog's normal settings. Three modules:
+[app/lanaddr.py](app/lanaddr.py) picks the address, [app/phone.py](app/phone.py)
+owns the session and the listener, [app/incoming.py](app/incoming.py) holds
+what arrived.
+
+**The main app stays on `127.0.0.1`. Do not "simplify" this into binding it
+to `0.0.0.0`.** The phone talks to a second Werkzeug server, started when the
+tab opens and stopped once there is no session and nothing in flight, whose
+Flask app has exactly three routes (`/u/<token>`, `/u/<token>/batch`,
+`/u/<token>/file`). A route guard on a LAN-bound main app is one bug away from
+putting every transcript, recording and delete endpoint on the office Wi-Fi;
+a listener that has no such routes cannot leak them. `test_phone.py` asserts
+the URL map is exactly those three.
+
+**One QR code, one browser.** The first page load claims the session with a
+cookie (stored as sha256); anyone else who scans it - a colleague photographing
+the screen - gets 此 QR 碼已在另一台裝置使用. Strictly that is one *browser*:
+open it in LINE's built-in reader, then in Safari, and Safari is refused. That
+is accepted to keep the guarantee real; 換一個 QR 碼 is the way out, and LINE's
+own browser can upload. The cookie is `SameSite=Lax`, not Strict - re-scanning
+is a navigation from the camera app and Strict would refuse the owner.
+
+**The hotspot address wins.** `lanaddr.pick()` puts a `192.168.137.x` address
+(Windows Mobile Hotspot) in the QR whenever one exists, before the
+default-route address. The hotspot shares an existing connection, so the
+default route still points at the office Wi-Fi while it is on - exactly the
+network whose client isolation sent the user to the hotspot. Only RFC 1918
+ranges are eligible, 172.16/12 (WSL, Hyper-V) last; not `is_private`, which
+admits CGNAT/Tailscale.
+
+**開始辨識 waits for the phone.** The phone announces how many files it is
+sending; until each has arrived or failed, `status()["ready"]` is false and
+the button is disabled, so pressing it early cannot silently leave the rest
+out. A transfer that dies without the server seeing it (phone locked before
+the request landed) would hold the button forever, so after `STALL_SEC` (30s)
+of no activity the status turns 手機傳送中斷 and the button comes back; the
+next batch the phone announces (its 重試) starts the count afresh, or every
+later batch reads `接收中 n/n+1`. An upload is counted against the session
+that started it (`begin_upload()` returns it, `end_upload()` takes it back):
+after 換一個 QR 碼 mid-transfer, the old file finishing must not tick off the
+new batch and open the gate early.
+
+**The laptop shows each file as it travels.** The phone announces names and
+sizes the moment files are picked; the session keeps one entry per file
+(`waiting -> sending -> done | failed`) and `status()["files"]` carries them,
+with every count (`outstanding`, `batch_done`, `batch_total`) derived from that
+list so the rows and the 接收中 line cannot disagree. Uploads are matched to
+their row by name, and a retry reuses its failed row. The dialog draws them
+in the 來自手機 list below the held files, updated in place by
+`data-key="<batch>-<index>"`; a `done` row disappears in the same poll that
+brings its held row.
+
+**A vanished phone must not hold the port.** A phone that walks out of Wi-Fi
+range, or that iOS suspends, can disappear without closing its connection;
+its upload would block in `recv()` forever, keep `in_flight` above zero and
+the 0.0.0.0 port open until restart. The listener's handler sets a per-recv
+`SOCKET_TIMEOUT_SEC` (120s), which Werkzeug surfaces as `ClientDisconnected`,
+so the upload ends as a 400 like any other drop.
+
+**`startPhone()` runs once at a time.** Clicking the already-open 用手機傳 tab
+does nothing (it used to replace the session and orphan the connected phone's
+queued files), 換一個 QR 碼 is disabled while its POST is pending, and a
+superseded response is dropped by a generation counter - overlapping calls
+used to leak a poll timer that heartbeated the session for the life of the
+page.
+
+**Sessions end with the dialog.** Closing it sends `DELETE`; a tab closed
+without closing the dialog stops the one-second poll, which is the heartbeat,
+and the session expires after `SESSION_IDLE_SEC` (60s). An upload already
+running finishes either way - `in_flight` is counted outside the session -
+but nothing new is accepted.
+
+**Held files outlive the dialog.** A file that crossed the network is kept in
+`data/incoming/` until it is started or ×'d; pressing Esc must not throw away
+a 1 GB transfer. `POST /api/projects` with `incoming=<id>` moves it into the
+project (`replace()`, same volume) instead of re-uploading. `meta.json` is
+written last, so a half transfer is never listed, and `create_app()` clears
+slots without one.
+
+**The first launch triggers a Windows Firewall prompt** - binding `0.0.0.0` is
+what asks. If the user declines, or Windows has the network as Public and the
+allow rule covers only Private, the QR scans but the page never loads. The
+dialog only tells the user to click 允許; it does not yet explain the Public
+case or how to undo a 取消 - and whether Windows classifies the Mobile Hotspot
+adapter as Public is unchecked. `test_e2e.py` binds it for real (the prompt
+appears once there too); `test_phone.py` binds `127.0.0.1` and does not.
+
+Phone uploads are plain HTTP (no secure context, so no Wake Lock) with no size
+cap - an iPhone video passes the main app's 2 GB `MAX_CONTENT_LENGTH` easily,
+so the body is streamed to disk in 1 MiB chunks rather than parsed as a form.
 
 ## CPU sizing
 
